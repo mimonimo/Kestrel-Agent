@@ -1,9 +1,7 @@
 """에이전트의 '두뇌' — CVE 분석/댓글/답글 텍스트를 생성한다.
 
-백엔드(교체 가능):
-  - OllamaBrain : 로컬 Ollama(무료·기본). exaone3.5(한국어 특화) 권장.
-  - ClaudeBrain : Anthropic Claude(유료·최고 품질). adaptive thinking.
-  - DryBrain    : LLM 없이 템플릿. 키 없이 자율 흐름 확인(데모/테스트).
+백엔드 호출은 llm.py(LLMClient: Anthropic/OpenAI 호환/Ollama)에 위임하고, 여기서는
+프롬프트 작성과 품질 관문(generate)만 담당한다. dry 백엔드는 DryBrain 템플릿으로 처리.
 
 품질 설계(작은 로컬 모델 대응):
   - 시스템 프롬프트로 한국어 강제·환각 금지·방어 목적·간결성을 못박는다.
@@ -12,18 +10,9 @@
 """
 from __future__ import annotations
 
-import json
 import re
-import threading
-import urllib.request
-from abc import ABC, abstractmethod
 
 from config import Config
-
-# 여러 에이전트(스레드)가 한 Ollama 서버를 공유할 때 생성을 직렬화한다.
-# 모델이 병목이라 동시 실행은 자원을 쪼개 오히려 느리고 타임아웃을 유발한다.
-# 한 번에 하나씩 풀스피드로 처리하는 편이 전체 처리량이 더 높다.
-_OLLAMA_LOCK = threading.Lock()
 
 _CVE_RE = re.compile(r"CVE-\d{4}-\d{4,7}", re.IGNORECASE)  # feeds.py 와 동일(실제 CVE 형식)
 _MAX_CALLS = 5  # 한 생성 작업의 총 모델 호출 상한(견고성+품질 재시도 합산)
@@ -92,16 +81,14 @@ def _cve_brief(detail: dict) -> str:
     )
 
 
-class Brain(ABC):
-    """프롬프트 구성은 공통, 텍스트 생성(_complete)만 백엔드별로 구현."""
+class Brain:
+    """프롬프트 구성 + 단일 품질 관문. 모델 호출은 LLMClient(client)에 위임."""
 
-    def __init__(self, cfg: Config):
+    def __init__(self, cfg: Config, client=None):
         self.cfg = cfg
+        self.client = client
         self.system = _persona_system(cfg)
-
-    @abstractmethod
-    def _complete(self, system: str, user: str, max_tokens: int = 1400,
-                  temperature: float = 0.4) -> str: ...
+        self.log = lambda *_: None  # agent 가 주입(폴백/재시도 로깅용)
 
     @staticmethod
     def _unfence(text: str) -> str:
@@ -125,6 +112,41 @@ class Brain(ABC):
         if rb.endswith("```"):
             body = rb[:-3]
         return body.strip()
+
+    def generate(self, system: str, user: str, *, max_tokens: int, effort: str = "medium",
+                 min_len: int = 1, required: list[str] | None = None,
+                 allowed_cves: set[str] | None = None, redact: bool = True,
+                 label: str = "gen") -> str:
+        """총 _MAX_CALLS 회 예산 안에서 호출→정제→검증→재시도. 실패 시 안전 폴백."""
+        user2 = user
+        best = ""
+        for _ in range(_MAX_CALLS):
+            try:
+                raw = self.client.complete(system, user2, max_tokens=max_tokens, effort=effort)
+            except Exception as e:  # noqa: BLE001 — llm.LLMError 포함
+                if getattr(e, "fatal", False):
+                    raise
+                continue  # 일시적 호출 실패 → 예산 내 재시도
+            body = self._unfence(raw)
+            fails: list[str] = []
+            if len(body) < min_len:
+                fails.append("길이 부족")
+            if required and not _has_sections(body, required):
+                fails.append("필수 섹션 누락")
+            unknown = (_find_cves(body) - allowed_cves) if allowed_cves else set()
+            if unknown:
+                fails.append(f"미허용 CVE {sorted(unknown)}")
+            if not fails:
+                return body
+            best = body
+            user2 = (user + "\n\n[교정 요청] 직전 출력 문제: " + "; ".join(fails)
+                     + ". 반드시 고쳐서 다시 작성하세요.")
+        if best and allowed_cves and redact:
+            best = _redact_cves(best, allowed_cves)
+        if len(best) >= min_len:
+            self.log(f"  ⚠️ 생성 품질 미달 폴백({label})")
+            return best
+        return ""
 
     def analyze_cve(self, detail: dict, context: str = "") -> str:
         ext = (
@@ -173,7 +195,11 @@ class Brain(ABC):
             "단순 '업데이트하세요' 금지 — 수정 버전·설정 키·정규식·패치 위치를 구체적으로."
             f"{ext_rule}"
         )
-        return self._unfence(self._complete(self.system, user, max_tokens=2400, temperature=0.35))
+        return self.generate(
+            self.system, user, max_tokens=2400, effort="high",
+            min_len=300, required=["요약", "공격", "예시|PoC", "탐지", "방어"],
+            allowed_cves={(detail.get("cveId") or "").upper()} - {""}, label="분석",
+        )
 
     def comment_on_peer(self, peer: dict) -> str:
         user = (
@@ -185,7 +211,8 @@ class Brain(ABC):
             f"'{self.cfg.persona}' 관점에서 이 분석에 짧은 댓글(2~3문장, 한국어)을 남기세요. "
             "동의·반박·추가 관점 중 하나를 골라 구체적으로. 일반론·인사말 금지."
         )
-        return self._unfence(self._complete(self.system, user, max_tokens=300, temperature=0.6))
+        return self.generate(self.system, user, max_tokens=300, effort="medium",
+                             min_len=15, label="댓글")
 
     def reply_to_comment(self, notif: dict) -> str:
         user = (
@@ -196,7 +223,8 @@ class Brain(ABC):
             "이 코멘트에 짧고 성의 있게(2~3문장, 한국어) 답글하세요. "
             "지적이 타당하면 인정하고 보완점을 적습니다. 반복·인사말 금지."
         )
-        return self._unfence(self._complete(self.system, user, max_tokens=300, temperature=0.6))
+        return self.generate(self.system, user, max_tokens=300, effort="medium",
+                             min_len=15, label="답글")
 
     def reply_in_thread(self, cve_id: str, target: dict, thread: list[dict]) -> str:
         """동료 분석에 달린 *다른 에이전트의 댓글* 에 이어 답한다(작성자가 내가 아니어도).
@@ -220,7 +248,8 @@ class Brain(ABC):
             f"'{self.cfg.persona}' 관점에서 이 댓글에 이어 대화하듯 짧게(2~3문장, 한국어) 답하세요. "
             "동의하면 근거를 더하고, 이견이면 구체적으로 반박합니다. 인사말·일반론·반복 금지."
         )
-        return self._unfence(self._complete(self.system, user, max_tokens=300, temperature=0.6))
+        return self.generate(self.system, user, max_tokens=300, effort="medium",
+                             min_len=15, label="토론")
 
     def write_topic_post(self, items: list[dict]) -> str:
         """CVE 한 건에 묶이지 않은 자유 토픽 글(동향 브리핑) 본문을 생성한다.
@@ -249,70 +278,14 @@ class Brain(ABC):
             "출력은 위 `##` 헤더로 시작하는 마크다운 본문만. 절대 응답 전체를 ``` 나 "
             "```markdown 으로 감싸지 마세요(코드블록은 쓰지 않습니다)."
         )
-        return self._unfence(self._complete(self.system, user, max_tokens=900, temperature=0.5))
-
-
-class OllamaBrain(Brain):
-    """로컬 Ollama(무료). OLLAMA_HOST / OLLAMA_MODEL."""
-
-    def _complete(self, system: str, user: str, max_tokens: int = 1400,
-                  temperature: float = 0.4) -> str:
-        payload = json.dumps({
-            "model": self.cfg.ollama_model,
-            "system": system,
-            "prompt": user,
-            "stream": False,
-            "options": {
-                "temperature": temperature,
-                "top_p": 0.9,
-                "repeat_penalty": 1.1,
-                "num_ctx": 8192,         # 설명+프롬프트가 잘리지 않도록
-                "num_predict": max_tokens,
-            },
-        }).encode()
-        req = urllib.request.Request(
-            f"{self.cfg.ollama_host.rstrip('/')}/api/generate",
-            data=payload, method="POST",
-            headers={"Content-Type": "application/json"},
-        )
-        with _OLLAMA_LOCK:  # 에이전트 간 생성 직렬화(자원 경합·타임아웃 방지)
-            with urllib.request.urlopen(req, timeout=600) as r:
-                return (json.loads(r.read().decode()).get("response") or "").strip()
-
-
-class ClaudeBrain(Brain):
-    """Anthropic Claude. adaptive thinking + effort high (temperature 미사용)."""
-
-    def __init__(self, cfg: Config):
-        super().__init__(cfg)
-        try:
-            import anthropic  # noqa: PLC0415
-        except ImportError as e:
-            raise SystemExit(
-                "anthropic 패키지가 없습니다. `pip install -r requirements.txt` 를 실행하세요."
-            ) from e
-        self._client = anthropic.Anthropic(api_key=cfg.anthropic_api_key)
-
-    def _complete(self, system: str, user: str, max_tokens: int = 1400,
-                  temperature: float = 0.4) -> str:
-        # Opus 4.x 는 temperature 미지원 — adaptive thinking 으로 대체.
-        resp = self._client.messages.create(
-            model=self.cfg.anthropic_model,
-            max_tokens=max(max_tokens, 1024),
-            thinking={"type": "adaptive"},
-            output_config={"effort": "high"},
-            system=system,
-            messages=[{"role": "user", "content": user}],
-        )
-        return "".join(b.text for b in resp.content if b.type == "text").strip()
+        allowed = {(it.get("cveId") or "").upper() for it in items} - {""}
+        return self.generate(self.system, user, max_tokens=900, effort="medium",
+                             min_len=150, required=["동향|요약", "권고"],
+                             allowed_cves=allowed, label="자유글")
 
 
 class DryBrain(Brain):
     """LLM 없이 템플릿으로 자율 흐름만 검증(데모). 외부 키 불필요."""
-
-    def _complete(self, system: str, user: str, max_tokens: int = 1400,
-                  temperature: float = 0.4) -> str:  # pragma: no cover
-        return ""
 
     def analyze_cve(self, detail: dict, context: str = "") -> str:
         cid = detail.get("cveId")
@@ -343,4 +316,7 @@ class DryBrain(Brain):
 
 
 def make_brain(cfg: Config) -> Brain:
-    return {"ollama": OllamaBrain, "claude": ClaudeBrain, "dry": DryBrain}[cfg.backend](cfg)
+    if cfg.backend == "dry":
+        return DryBrain(cfg)
+    from llm import make_client  # noqa: PLC0415
+    return Brain(cfg, make_client(cfg))
