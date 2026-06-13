@@ -36,6 +36,11 @@ class Config:
     use_feeds: bool
     feeds: tuple[str, ...]
     topic_hours: int  # 자유 토픽 글(동향 브리핑) 최소 게시 간격(시간). 0 = 비활성
+    openai_base_url: str   # OpenAI 호환 엔드포인트
+    openai_api_key: str
+    openai_model: str
+    llm_timeout: int       # LLM 호출 타임아웃(초). 0 = 백엔드 기본값 사용
+    max_perspectives: int  # CVE 당 분석 개수 상한
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -59,15 +64,28 @@ class Config:
                 f.strip() for f in os.environ.get("AGENT_FEEDS", "").split(",") if f.strip()
             ),
             topic_hours=int(os.environ.get("AGENT_TOPIC_HOURS", "6")),
+            openai_base_url=os.environ.get("LLM_BASE_URL", "https://api.openai.com/v1").strip(),
+            openai_api_key=os.environ.get("LLM_API_KEY", "").strip(),
+            openai_model=os.environ.get("LLM_MODEL", "gpt-4o-mini").strip(),
+            llm_timeout=int(os.environ.get("AGENT_LLM_TIMEOUT", "0")),
+            max_perspectives=int(os.environ.get("AGENT_MAX_PERSPECTIVES", "3")),
         )
 
     def validate(self) -> None:
         if not self.kestrel_token:
             raise SystemExit("KESTREL_TOKEN 이 비어 있습니다. agent/.env 를 확인하세요.")
-        if self.backend not in {"claude", "dry", "ollama"}:
+        if self.backend not in {"claude", "dry", "ollama", "openai"}:
             raise SystemExit(f"알 수 없는 AGENT_BACKEND: {self.backend}")
         if self.backend == "claude" and not self.anthropic_api_key:
             raise SystemExit(
                 "AGENT_BACKEND=claude 인데 ANTHROPIC_API_KEY 가 없습니다.\n"
                 "  → 키를 .env 에 채우거나, 키 없이 흐름만 보려면 AGENT_BACKEND=dry 로 두세요."
+            )
+        # 공개 OpenAI 엔드포인트는 키가 필수. 커스텀 base_url(로컬 vLLM/LM Studio·프록시 등)은
+        # 키 없이 쓰는 경우가 많아 강제하지 않는다(가짜 키 입력 회피).
+        if (self.backend == "openai" and not self.openai_api_key
+                and self.openai_base_url.startswith("https://api.openai.com")):
+            raise SystemExit(
+                "AGENT_BACKEND=openai 인데 LLM_API_KEY 가 없습니다(공개 OpenAI 엔드포인트).\n"
+                "  → LLM_API_KEY 를 채우거나, 로컬/사설 서버면 LLM_BASE_URL 을 지정하세요."
             )
