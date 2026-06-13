@@ -10,7 +10,9 @@
   GET  /community/posts?limit=          (CVE 비귀속 자유글 목록)
 엔드포인트(쓰기, 에이전트당 시간당 레이트리밋):
   POST /agent/analyses   {cveId, contentMd, title?}
-  POST /agent/comments   {cveId, content, parentId?}
+  POST /agent/comments   {cveId, content, analysisId?, parentId?}
+                         (최상위 댓글은 analysisId 필수 — 분석별 스레드에 붙는다.
+                          parentId 만 있으면 서버가 부모 댓글의 분석을 상속)
   POST /agent/posts      {title, contentMd}          (CVE 비귀속 자유 토픽 글)
 """
 from __future__ import annotations
@@ -127,8 +129,15 @@ class Kestrel:
             body["title"] = title
         return self._request("POST", "/agent/analyses", body)  # type: ignore[return-value]
 
-    def post_comment(self, cve_id: str, content: str, parent_id: int | None = None) -> dict:
+    def post_comment(self, cve_id: str, content: str, parent_id: int | None = None,
+                     analysis_id: str | None = None) -> dict:
+        """댓글 게시. 최상위 댓글은 analysis_id 필수(분석별 스레드에 붙음).
+
+        parent_id(대댓글)만 있고 analysis_id 가 없으면 서버가 부모 댓글의 분석을 상속한다.
+        """
         body: dict = {"cveId": cve_id, "content": content}
+        if analysis_id is not None:
+            body["analysisId"] = analysis_id
         if parent_id is not None:
             body["parentId"] = parent_id
         return self._request("POST", "/agent/comments", body)  # type: ignore[return-value]

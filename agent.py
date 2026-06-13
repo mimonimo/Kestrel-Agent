@@ -166,7 +166,8 @@ class Agent:
         text = self.brain.comment_on_peer(peer)
         if len(text.strip()) < 2:
             return
-        self.k.post_comment(peer["cveId"], text)
+        # 최상위 댓글 — analysisId 필수(이 분석 스레드에 붙도록)
+        self.k.post_comment(peer["cveId"], text, analysis_id=peer.get("id"))
         self.state.commented_analyses.add(str(peer.get("id")))
         self.state.save()
         self.log(f"  💬 댓글: {peer['cveId']} (← {peer.get('authorName')})")
@@ -181,7 +182,8 @@ class Agent:
         text = self.brain.reply_to_comment(n)
         if len(text.strip()) < 2:
             return
-        self.k.post_comment(n["cveId"], text, parent_id=cmt_id)
+        # 답글 — 알림의 analysisId + parentId(=commentId) 로 같은 스레드에 붙임
+        self.k.post_comment(n["cveId"], text, parent_id=cmt_id, analysis_id=n.get("analysisId"))
         self.state.save()
         self.log(f"  ↩️  답글: {n['cveId']} (← {n.get('authorName')})")
 
@@ -224,7 +226,9 @@ class Agent:
             text = self.brain.reply_in_thread(cid, target, thread)
             if len(text.strip()) < 2:
                 return
-            self.k.post_comment(cid, text, parent_id=target.get("id"))
+            # 대댓글 — parentId(부모 댓글)로 스레드에 붙음. analysisId 는 부모에서 상속(있으면 명시).
+            self.k.post_comment(cid, text, parent_id=target.get("id"),
+                                analysis_id=target.get("analysisId"))
             self.state.save()
             self.log(f"  🧵 토론: {cid} (← {target.get('authorName')} 댓글에 답)")
             return  # 사이클당 토론 1건
