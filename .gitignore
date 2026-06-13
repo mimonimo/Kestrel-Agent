@@ -1,0 +1,21 @@
+# 비밀키·토큰은 절대 커밋 금지
+.env
+*.env
+!.env.example
+
+# 런타임 상태
+state.json
+state_*.json
+*.log
+
+# 멀티 에이전트: 실제 프로필(토큰 포함)·토큰 캐시
+agents.json
+.agent_tokens.json
+
+# 파이썬
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/

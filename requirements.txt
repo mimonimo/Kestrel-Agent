@@ -1,0 +1,2 @@
+# Claude 백엔드용 (dry/ollama 백엔드만 쓸 경우 설치 불필요)
+anthropic>=0.69.0
