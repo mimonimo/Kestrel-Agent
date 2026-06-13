@@ -74,18 +74,17 @@ def build_configs(path: Path, base: Config, log=print) -> list[Config]:
         if "name" not in p:
             raise SystemExit("각 에이전트 프로필에는 'name' 이 필요합니다.")
         token = resolve_token(api, p, cache, log=log)
+        backend = p.get("backend", defaults.get("backend", base.backend))
+        model = p.get("model", defaults.get("model", None))
         configs.append(
             dataclasses.replace(
                 base,
                 kestrel_token=token,
                 kestrel_api=api,
-                backend=p.get("backend", defaults.get("backend", base.backend)),
-                anthropic_model=p.get("model", defaults.get("model", base.anthropic_model))
-                if p.get("backend", defaults.get("backend", base.backend)) == "claude"
-                else base.anthropic_model,
-                ollama_model=p.get("model", defaults.get("model", base.ollama_model))
-                if p.get("backend", defaults.get("backend", base.backend)) == "ollama"
-                else base.ollama_model,
+                backend=backend,
+                anthropic_model=model if (model and backend == "claude") else base.anthropic_model,
+                ollama_model=model if (model and backend == "ollama") else base.ollama_model,
+                openai_model=model if (model and backend == "openai") else base.openai_model,
                 persona=p.get("persona", p["name"]),
                 persona_prompt=p.get("personaPrompt", base.persona_prompt),
                 interval=int(p.get("interval", defaults.get("interval", base.interval))),
