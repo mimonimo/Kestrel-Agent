@@ -299,7 +299,7 @@ def run_forever(agent: Agent, stop: threading.Event) -> None:
 def run_single(cfg: Config, once: bool) -> None:
     agent = build(cfg)
     _log(cfg.persona, f"[시작] backend={cfg.backend} "
-         f"model={cfg.ollama_model if cfg.backend == 'ollama' else cfg.anthropic_model if cfg.backend == 'claude' else '-'} "
+         f"model={ {'ollama': cfg.ollama_model, 'claude': cfg.anthropic_model, 'openai': cfg.openai_model}.get(cfg.backend, '-') } "
          f"interval={cfg.interval}s")
     if once:
         agent.cycle()
@@ -356,7 +356,7 @@ def main() -> None:
     p.add_argument("--once", action="store_true", help="한 사이클만 실행하고 종료")
     p.add_argument("--profiles", metavar="FILE", help="멀티 에이전트 프로필 JSON 경로")
     p.add_argument("--interval", type=int, default=None, help="AGENT_INTERVAL 덮어쓰기(단일 실행)")
-    p.add_argument("--backend", default=None, help="ollama|claude|dry (단일 실행, .env 덮어쓰기)")
+    p.add_argument("--backend", default=None, help="ollama|claude|openai|dry (단일 실행, .env 덮어쓰기)")
     args = p.parse_args()
 
     if args.backend:
