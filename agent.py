@@ -117,9 +117,11 @@ class Agent:
         except Exception as e:  # noqa: BLE001
             self.log(f"· 피드 수집 실패: {type(e).__name__}")
             return None, "", ""
-        for cid, art in articles.items():
-            if not self._can_analyze(cid, counts):
-                continue
+        # 브레드스 우선: 아무도 분석 안 한 CVE(count 0)를 먼저 고르고, 같은 count 끼리는
+        # 피드 등장순(대개 최신)을 유지한다. 같은 CVE 가 계속 재선정되는 쏠림을 줄인다.
+        cands = [(cid, art) for cid, art in articles.items() if self._can_analyze(cid, counts)]
+        cands.sort(key=lambda x: counts.get(x[0], 0))
+        for cid, art in cands:
             try:
                 detail = self.k.get_cve(cid)  # kestrel 에 없으면 404 → 건너뜀
             except KestrelError:
@@ -136,7 +138,9 @@ class Agent:
             self.log(f"· 외부 보도 기반 선정: {detail.get('cveId')} (출처 {src})")
         else:
             cands = self.k.list_cves(limit=10)
-            target = next((c for c in cands if self._can_analyze(c["cveId"], counts)), None)
+            eligible = [c for c in cands if self._can_analyze(c["cveId"], counts)]
+            eligible.sort(key=lambda c: counts.get(c["cveId"], 0))  # 새 CVE(0건) 우선
+            target = eligible[0] if eligible else None
             if target is None:
                 self.log("· 분석할 새 CVE 가 없습니다(이번 사이클 건너뜀).")
                 return
@@ -151,6 +155,7 @@ class Agent:
             return
         out = self.k.publish_analysis(cid, body)
         self.state.analyzed_cves.add(cid)
+        self.state.save()  # 게시 직후 즉시 저장 — 갑작스런 종료에도 재분석 방지
         self.log(f"  ✅ 게시 완료 {cid} (analysisId={out.get('id')})")
 
     # ── 2) 동료 글에 댓글 ─────────────────────────────────────
@@ -163,6 +168,7 @@ class Agent:
             return
         self.k.post_comment(peer["cveId"], text)
         self.state.commented_analyses.add(str(peer.get("id")))
+        self.state.save()
         self.log(f"  💬 댓글: {peer['cveId']} (← {peer.get('authorName')})")
 
     # ── 3) 알림(내 글에 달린 코멘트)에 답글 ────────────────────
@@ -176,6 +182,7 @@ class Agent:
         if len(text.strip()) < 2:
             return
         self.k.post_comment(n["cveId"], text, parent_id=cmt_id)
+        self.state.save()
         self.log(f"  ↩️  답글: {n['cveId']} (← {n.get('authorName')})")
 
     # ── 4) 동료 분석의 댓글 스레드에서 '남의 댓글'에 이어 답글(토론 체인) ──
@@ -218,6 +225,7 @@ class Agent:
             if len(text.strip()) < 2:
                 return
             self.k.post_comment(cid, text, parent_id=target.get("id"))
+            self.state.save()
             self.log(f"  🧵 토론: {cid} (← {target.get('authorName')} 댓글에 답)")
             return  # 사이클당 토론 1건
 
@@ -250,6 +258,7 @@ class Agent:
         title = f"{self.cfg.persona} · 보안 동향 브리핑 ({time.strftime('%Y-%m-%d')})"
         out = self.k.publish_post(title, body)
         self.state.last_topic_ts = now
+        self.state.save()
         self.log(f"  📝 자유글 게시: {title} (postId={out.get('id')})")
 
     # ── 한 사이클 ─────────────────────────────────────────────
