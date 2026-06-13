@@ -49,12 +49,64 @@ class Agent:
         self.brain = brain
         self.state = state
         self.tag = tag  # 로그 식별용(페르소나)
+        self.brain.log = self.log
 
     def log(self, msg: str) -> None:
         _log(self.tag, msg)
 
+    # ── 선택 헬퍼 ─────────────────────────────────────────────
+    @staticmethod
+    def _analysis_counts(community: list[dict]) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for a in community:
+            cid = a.get("cveId")
+            if cid:
+                counts[cid] = counts.get(cid, 0) + 1
+        return counts
+
+    def _can_analyze(self, cve_id: str, counts: dict[str, int]) -> bool:
+        """내가 아직 안 했고, CVE 당 분석 상한 미만이면 분석 가능(같은 CVE 다관점 허용)."""
+        if cve_id in self.state.analyzed_cves:
+            return False
+        return counts.get(cve_id, 0) < self.cfg.max_perspectives
+
+    def _pick_notification(self, notifs: list[dict]) -> dict | None:
+        """내가 쓴 코멘트(자기인용)·기답·빈내용 제외. 알림 API 가 준 순서대로 첫 미답을 고른다."""
+        for n in notifs:
+            cid = n.get("commentId")
+            if str(cid) in self.state.replied_comments:
+                continue
+            if (n.get("authorPersona") == self.cfg.persona
+                    or n.get("authorName") == self.cfg.persona):
+                continue
+            if len((n.get("content") or "").strip()) < 2:
+                continue
+            return n
+        return None
+
+    @staticmethod
+    def _score_peer(a: dict) -> float:
+        """동료 분석 선택 점수: 댓글 적을수록·심각도 높을수록 가산(최신성은 _pick_peer 정렬 1순위)."""
+        sev = {"critical": 3, "high": 2, "medium": 1}.get(
+            (a.get("severity") or "").lower(), 0)
+        comments = a.get("commentCount") or 0
+        return sev * 10 - comments * 0.5
+
+    def _pick_peer(self, community: list[dict]) -> dict | None:
+        eligible = [
+            a for a in community
+            if a.get("authorPersona") != self.cfg.persona
+            and str(a.get("id")) not in self.state.commented_analyses
+        ]
+        if not eligible:
+            return None
+        random.shuffle(eligible)  # 동률 랜덤 타이브레이크(여러 에이전트 쏠림 방지)
+        eligible.sort(key=lambda a: (a.get("createdAt") or "", self._score_peer(a)),
+                      reverse=True)
+        return eligible[0]
+
     # ── 1) 분석할 CVE 한 건 선정 → 분석 → 게시 ────────────────
-    def _pick_from_feeds(self) -> tuple[dict | None, str, str]:
+    def _pick_from_feeds(self, counts: dict[str, int]) -> tuple[dict | None, str, str]:
         """외부 보안 보도에서 *실제로 화제인* CVE 중 kestrel 에 존재하는 것을 고른다."""
         if not self.cfg.use_feeds:
             return None, "", ""
@@ -66,7 +118,7 @@ class Agent:
             self.log(f"· 피드 수집 실패: {type(e).__name__}")
             return None, "", ""
         for cid, art in articles.items():
-            if cid in self.state.analyzed_cves:
+            if not self._can_analyze(cid, counts):
                 continue
             try:
                 detail = self.k.get_cve(cid)  # kestrel 에 없으면 404 → 건너뜀
@@ -78,17 +130,13 @@ class Agent:
         return None, "", ""
 
     def do_analysis(self, community: list[dict]) -> None:
-        detail, context, src = self._pick_from_feeds()
+        counts = self._analysis_counts(community)
+        detail, context, src = self._pick_from_feeds(counts)
         if detail is not None:
             self.log(f"· 외부 보도 기반 선정: {detail.get('cveId')} (출처 {src})")
         else:
             cands = self.k.list_cves(limit=10)
-            community_cves = {a.get("cveId") for a in community}
-            target = next(
-                (c for c in cands if c["cveId"] not in self.state.analyzed_cves
-                 and c["cveId"] not in community_cves),
-                None,
-            ) or next((c for c in cands if c["cveId"] not in self.state.analyzed_cves), None)
+            target = next((c for c in cands if self._can_analyze(c["cveId"], counts)), None)
             if target is None:
                 self.log("· 분석할 새 CVE 가 없습니다(이번 사이클 건너뜀).")
                 return
@@ -107,12 +155,7 @@ class Agent:
 
     # ── 2) 동료 글에 댓글 ─────────────────────────────────────
     def do_comment(self, community: list[dict]) -> None:
-        peer = next(
-            (a for a in community
-             if a.get("authorPersona") != self.cfg.persona
-             and str(a.get("id")) not in self.state.commented_analyses),
-            None,
-        )
+        peer = self._pick_peer(community)
         if peer is None:
             return
         text = self.brain.comment_on_peer(peer)
@@ -124,17 +167,16 @@ class Agent:
 
     # ── 3) 알림(내 글에 달린 코멘트)에 답글 ────────────────────
     def do_replies(self) -> None:
-        for n in self.k.notifications(limit=10) or []:
-            cmt_id = n.get("commentId")
-            if str(cmt_id) in self.state.replied_comments:
-                continue
-            self.state.replied_comments.add(str(cmt_id))
-            text = self.brain.reply_to_comment(n)
-            if len(text.strip()) < 2:
-                continue
-            self.k.post_comment(n["cveId"], text, parent_id=cmt_id)
-            self.log(f"  ↩️  답글: {n['cveId']} (← {n.get('authorName')})")
-            return  # 사이클당 답글 1건
+        n = self._pick_notification(self.k.notifications(limit=10) or [])
+        if n is None:
+            return
+        cmt_id = n.get("commentId")
+        self.state.replied_comments.add(str(cmt_id))
+        text = self.brain.reply_to_comment(n)
+        if len(text.strip()) < 2:
+            return
+        self.k.post_comment(n["cveId"], text, parent_id=cmt_id)
+        self.log(f"  ↩️  답글: {n['cveId']} (← {n.get('authorName')})")
 
     # ── 4) 동료 분석의 댓글 스레드에서 '남의 댓글'에 이어 답글(토론 체인) ──
     def _pick_thread_comment(self, thread: list[dict]) -> dict | None:
