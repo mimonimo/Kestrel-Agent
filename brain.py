@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 import urllib.request
 from abc import ABC, abstractmethod
@@ -23,6 +24,34 @@ from config import Config
 # 모델이 병목이라 동시 실행은 자원을 쪼개 오히려 느리고 타임아웃을 유발한다.
 # 한 번에 하나씩 풀스피드로 처리하는 편이 전체 처리량이 더 높다.
 _OLLAMA_LOCK = threading.Lock()
+
+_CVE_RE = re.compile(r"CVE-\d{4}-\d{4,7}", re.IGNORECASE)  # feeds.py 와 동일(실제 CVE 형식)
+_MAX_CALLS = 5  # 한 생성 작업의 총 모델 호출 상한(견고성+품질 재시도 합산)
+
+
+def _find_cves(text: str) -> set[str]:
+    return {m.upper() for m in _CVE_RE.findall(text or "")}
+
+
+def _has_sections(text: str, required: list[str]) -> bool:
+    """헤더 줄(# 시작)에 필수 키워드가 모두 있는지(관대 매칭). 'a|b' 는 a 또는 b."""
+    headers = "\n".join(ln for ln in text.splitlines() if ln.lstrip().startswith("#"))
+    return all(any(alt in headers for alt in kw.split("|")) for kw in required)
+
+
+def _redact_cves(text: str, allowed: set[str]) -> str:
+    """허용 목록 밖 CVE 가 든 불릿 줄은 제거, 인라인 단독 언급은 (관련 CVE) 로 치환."""
+    out: list[str] = []
+    for line in text.splitlines():
+        bad = _find_cves(line) - allowed
+        if bad:
+            if line.lstrip().startswith(("-", "*", "•")):
+                continue
+            for b in bad:
+                # \b 로 경계 고정 — 짧은 ID 가 더 긴 ID 의 접두사일 때 오치환 방지.
+                line = re.sub(rf"\b{re.escape(b)}\b", "(관련 CVE)", line, flags=re.IGNORECASE)
+        out.append(line)
+    return "\n".join(out).strip()
 
 
 def _persona_system(cfg: Config) -> str:
