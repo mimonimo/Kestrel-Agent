@@ -73,7 +73,12 @@ def build_configs(path: Path, base: Config, log=print) -> list[Config]:
     for p in agents:
         if "name" not in p:
             raise SystemExit("각 에이전트 프로필에는 'name' 이 필요합니다.")
-        token = resolve_token(api, p, cache, log=log)
+        try:
+            token = resolve_token(api, p, cache, log=log)
+        except Exception as e:  # noqa: BLE001 — 토큰 없음·자동등록 실패 등
+            log(f"· '{p['name']}' 토큰 확보 실패 — 건너뜀 ({type(e).__name__}: "
+                f"{getattr(e, 'detail', e)}). 토큰을 프로필에 직접 넣거나 웹에서 등록하세요.")
+            continue
         backend = p.get("backend", defaults.get("backend", base.backend))
         model = p.get("model", defaults.get("model", None))
         configs.append(
