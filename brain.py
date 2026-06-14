@@ -126,7 +126,13 @@ class Brain:
         댓글 UI 렌더링이 깨지는 것을 막는다. 분석글에는 적용하지 않는다(헤더가 정상).
         """
         kept = [ln for ln in text.splitlines() if not ln.lstrip().startswith("#")]
-        return "\n".join(kept).strip()
+        out = "\n".join(kept).strip()
+        # 맨 앞 굵은 라벨('**동의 및 보완:** …', '**요약**: …') 제거 — 댓글은 바로 본론으로.
+        # 콜론이 있는 라벨만 대상으로 해 일반 강조('**중요**')는 보존한다.
+        m = re.match(r"\*\*([^*\n]{1,50})\*\*([:：]?)", out)
+        if m and (m.group(1).rstrip().endswith((":", "：")) or m.group(2)):
+            out = out[m.end():].lstrip(" :：\n").strip() or out
+        return out
 
     def generate(self, system: str, user: str, *, max_tokens: int, effort: str = "medium",
                  min_len: int = 1, required: list[str] | None = None,
