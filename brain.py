@@ -169,10 +169,15 @@ class Brain:
             return best
         return ""
 
-    def analyze_cve(self, detail: dict, context: str = "") -> str:
+    def analyze_cve(self, detail: dict, context: str = "", memory: str = "") -> str:
         ext = (
             "\n=== 외부 보안 보도(실제 동향) ===\n" + context.strip() + "\n================\n"
             if context.strip() else ""
+        )
+        mem = (
+            "\n=== 당신이 최근 다룬 것(같은 얘기 반복 금지 — 관련 있으면 그때 판단을 이어 발전시키세요) ===\n"
+            + memory.strip() + "\n================\n"
+            if memory.strip() else ""
         )
         ext_rule = (
             "\n또한 위 '외부 보안 보도' 를 근거로 **## 🌐 실제 동향** 섹션을 맨 끝에 추가해, "
@@ -185,7 +190,7 @@ class Brain:
             "=== CVE 정보 ===\n"
             f"{_cve_brief(detail)}\n"
             "================\n"
-            f"{ext}\n"
+            f"{ext}{mem}\n"
             "작성 원칙(엄수):\n"
             "- 제공된 CVE 정보·외부 보도에 **있는 사실만 단정**한다. 제품명·버전·엔드포인트·함수명을 "
             "지어내지 말 것. 공개 정보가 부족하면 유형(CWE)·제품군에 근거한 표준 패턴으로 채우되 "
@@ -256,8 +261,9 @@ class Brain:
             f"{(peer.get('excerpt') or '')[:700]}\n"
             "---\n\n"
             f"당신은 '{self.cfg.persona}'({self.cfg.persona_prompt}) 입니다. "
-            "이 관점에서만 보이는 포인트로 짧은 댓글(2~3문장, 한국어)을 남기세요 — "
-            "동의·반박·추가 관점 중 하나를 골라 구체적으로. 누구나 할 법한 일반론·인사말 금지.\n"
+            "이 관점에서만 보이는 포인트로 짧은 댓글(2~3문장, 한국어)을 남기세요. "
+            "맹목적 동의·칭찬만 하는 댓글은 금지 — 최소 한 가지는 의심·반박·놓친 점·다른 우선순위를 "
+            "구체적으로 제기하세요. 일반론·인사말 금지.\n"
             "평문으로만 작성 — 마크다운 제목(#/##), '○○의 답변/관점:' 같은 이름표, 코드펜스 없이 "
             "바로 본론. 강조(**)는 꼭 필요한 한두 군데만."
         )
@@ -340,11 +346,43 @@ class Brain:
                              min_len=150, required=["동향|요약", "권고"],
                              allowed_cves=allowed, label="자유글")
 
+    def write_community_digest(self, analyses: list[dict]) -> str:
+        """커뮤니티에 올라온 *실제 분석글들*을 엮어 '쟁점 종합' 자유글을 쓴다.
+
+        환각 방지를 위해 제공된 분석 목록(작성자·CVE·발췌)만 근거로 삼는다.
+        """
+        lines = "\n".join(
+            f"- {a.get('cveId')} / {a.get('authorName', '익명')}: "
+            f"{(a.get('excerpt') or '').strip()[:120]}"
+            for a in analyses
+        )
+        allowed = {(a.get("cveId") or "").upper() for a in analyses} - {""}
+        user = (
+            "아래는 우리 커뮤니티에 최근 올라온 분석글들입니다(작성자·CVE·발췌):\n"
+            "---\n"
+            f"{lines}\n"
+            "---\n\n"
+            f"당신은 '{self.cfg.persona}'({self.cfg.persona_prompt}) 입니다. "
+            "이 분석들을 읽고 당신 관점에서 '쟁점 종합' 글을 한국어 마크다운으로 쓰세요. "
+            "단순 나열이 아니라, 어디서 의견이 갈리는지·무엇이 과소/과대평가됐는지 짚으세요. 형식:\n\n"
+            "## 🧩 이번 라운드 쟁점\n"
+            "분석들에서 드러난 핵심 쟁점·이견을 2~3문장.\n\n"
+            "## ⚔️ 내 입장\n"
+            "당신 관점에서 누구 말에 동의/반대하는지, 놓친 각도는 무엇인지 구체적으로.\n\n"
+            "## ✅ 종합 권고\n"
+            "독자가 가져갈 결론 2~3가지.\n\n"
+            "제공된 목록에 없는 CVE·작성자·사실을 지어내지 마세요. 인사말·메타발언 금지. "
+            "응답 전체를 코드펜스로 감싸지 마세요."
+        )
+        return self.generate(self.system, user, max_tokens=900, effort="medium",
+                             min_len=150, required=["쟁점", "입장", "권고"],
+                             allowed_cves=allowed, label="종합")
+
 
 class DryBrain(Brain):
     """LLM 없이 템플릿으로 자율 흐름만 검증(데모). 외부 키 불필요."""
 
-    def analyze_cve(self, detail: dict, context: str = "") -> str:
+    def analyze_cve(self, detail: dict, context: str = "", memory: str = "") -> str:
         cid = detail.get("cveId")
         return (
             f"**요약** — {detail.get('title') or cid} ({detail.get('severity')}, "
@@ -370,6 +408,12 @@ class DryBrain(Brain):
         return (f"## 🔭 이번 동향 요약\n{self.cfg.persona} 관점에서 본 최근 취약점 동향입니다. "
                 f"({picks} 등)\n\n## ✅ 권고\n해당 제품 사용 여부 점검 후 벤더 패치·탐지 룰을 "
                 "우선 적용하세요. (LLM 없이 생성된 데모 자유글입니다.)")
+
+    def write_community_digest(self, analyses: list[dict]) -> str:
+        cves = ", ".join((a.get("cveId") or "?") for a in analyses[:4])
+        return (f"## 🧩 이번 라운드 쟁점\n{self.cfg.persona} 관점에서 본 커뮤니티 분석 쟁점입니다. "
+                f"({cves} 등)\n\n## ✅ 종합 권고\n관점별로 우선순위가 갈리니 자산 노출부터 점검하세요. "
+                "(LLM 없이 생성된 데모 종합글입니다.)")
 
 
 def make_brain(cfg: Config) -> Brain:

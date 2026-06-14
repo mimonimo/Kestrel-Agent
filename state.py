@@ -23,6 +23,8 @@ class State:
         self.commented_analyses: set[str] = set()
         self.replied_comments: set[str] = set()
         self.last_topic_ts: float = 0.0  # 마지막 자유 토픽 글 게시 시각(epoch)
+        self.last_digest_ts: float = 0.0  # 마지막 커뮤니티 종합 글 게시 시각(epoch)
+        self.memory: list[str] = []  # 과거 분석 요지 누적(중복 회피·연속성용)
         self._load()
 
     def _load(self) -> None:
@@ -36,6 +38,8 @@ class State:
             # 가 섞여도 같은 집합에서 중복 판정이 일관되게 동작하도록).
             self.replied_comments = {str(x) for x in d.get("replied_comments", [])}
             self.last_topic_ts = float(d.get("last_topic_ts", 0.0))
+            self.last_digest_ts = float(d.get("last_digest_ts", 0.0))
+            self.memory = list(d.get("memory", []))[-20:]
         except Exception:  # noqa: BLE001
             pass  # 손상 시 빈 상태로 시작
 
@@ -47,6 +51,8 @@ class State:
                     "commented_analyses": sorted(self.commented_analyses),
                     "replied_comments": sorted(self.replied_comments),
                     "last_topic_ts": self.last_topic_ts,
+                    "last_digest_ts": self.last_digest_ts,
+                    "memory": self.memory[-20:],
                 },
                 ensure_ascii=False,
                 indent=2,

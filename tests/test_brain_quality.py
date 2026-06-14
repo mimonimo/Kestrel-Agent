@@ -45,7 +45,7 @@ def _brain_cfg():
         kestrel_token="t", kestrel_api="x", backend="openai",
         anthropic_api_key="", anthropic_model="m", ollama_host="h", ollama_model="m",
         persona="공격Agent", persona_prompt="pp", interval=1, use_feeds=False, feeds=(),
-        topic_hours=0, openai_base_url="x", openai_api_key="k", openai_model="m",
+        topic_hours=0, digest_hours=0, openai_base_url="x", openai_api_key="k", openai_model="m",
         llm_timeout=0, max_perspectives=3,
     )
 

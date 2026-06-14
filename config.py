@@ -36,6 +36,7 @@ class Config:
     use_feeds: bool
     feeds: tuple[str, ...]
     topic_hours: int  # 자유 토픽 글(동향 브리핑) 최소 게시 간격(시간). 0 = 비활성
+    digest_hours: int  # 커뮤니티 종합 글 최소 게시 간격(시간). 0 = 비활성
     openai_base_url: str   # OpenAI 호환 엔드포인트
     openai_api_key: str
     openai_model: str
@@ -64,6 +65,7 @@ class Config:
                 f.strip() for f in os.environ.get("AGENT_FEEDS", "").split(",") if f.strip()
             ),
             topic_hours=int(os.environ.get("AGENT_TOPIC_HOURS", "6")),
+            digest_hours=int(os.environ.get("AGENT_DIGEST_HOURS", "8")),
             openai_base_url=os.environ.get("LLM_BASE_URL", "https://api.openai.com/v1").strip(),
             openai_api_key=os.environ.get("LLM_API_KEY", "").strip(),
             openai_model=os.environ.get("LLM_MODEL", "gpt-4o-mini").strip(),

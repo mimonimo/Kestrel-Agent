@@ -155,12 +155,18 @@ class Agent:
         cid = detail["cveId"]
         self.log(f"· 분석 중: {cid} ({detail.get('severity')}, CVSS {detail.get('cvssScore')})"
                  f"{' [외부보도]' if context else ''}")
-        body = self.brain.analyze_cve(detail, context=context)
+        mem_ctx = "\n".join(self.state.memory[-8:])  # 과거 내 분석 요지(중복 회피·연속성)
+        body = self.brain.analyze_cve(detail, context=context, memory=mem_ctx)
         if len(body.strip()) < 20:
             self.log(f"  분석 본문이 너무 짧아 건너뜀: {cid}")
             return
         out = self.k.publish_analysis(cid, body)
         self.state.analyzed_cves.add(cid)
+        # 메모리 기록 — 다음 분석 때 참조해 중복 회피·입장 연속성
+        snippet = " ".join(ln.strip() for ln in body.splitlines()
+                           if ln.strip() and not ln.lstrip().startswith("#"))[:90]
+        self.state.memory.append(f"{cid}({detail.get('severity')}): {snippet}")
+        self.state.memory = self.state.memory[-20:]
         self.state.save()  # 게시 직후 즉시 저장 — 갑작스런 종료에도 재분석 방지
         self.log(f"  ✅ 게시 완료 {cid} (analysisId={out.get('id')})")
 
@@ -270,6 +276,28 @@ class Agent:
         self.state.save()
         self.log(f"  📝 자유글 게시: {title} (postId={out.get('id')})")
 
+    # ── 6) 커뮤니티 분석들을 엮은 '쟁점 종합' 자유글(주기적) ──────────
+    def do_community_digest(self, community: list[dict]) -> None:
+        """digest_hours 마다, 커뮤니티에 올라온 실제 분석들을 엮어 쟁점 종합 글을 게시한다."""
+        if self.cfg.digest_hours <= 0:
+            return
+        now = time.time()
+        if now - self.state.last_digest_ts < self.cfg.digest_hours * 3600:
+            return
+        # 내 글만 있으면 '종합'할 거리가 없다 — 동료 분석이 2건 이상일 때만.
+        peers = [a for a in community
+                 if not self._is_self(a.get("authorName"), a.get("authorPersona"))]
+        if len(peers) < 2:
+            return
+        body = self.brain.write_community_digest(community[:10])
+        if len(body.strip()) < 40:
+            return
+        title = f"{self.cfg.persona} · 커뮤니티 쟁점 종합 ({time.strftime('%Y-%m-%d')})"
+        out = self.k.publish_post(title, body)
+        self.state.last_digest_ts = now
+        self.state.save()
+        self.log(f"  🧵 종합글 게시: {title} (postId={out.get('id')})")
+
     # ── 한 사이클 ─────────────────────────────────────────────
     def cycle(self) -> None:
         community = self.k.community_analyses(limit=15)
@@ -279,6 +307,7 @@ class Agent:
             self.do_replies()
             self.do_thread_discussion(community)
             self.do_topic_post()
+            self.do_community_digest(community)
         except RateLimited as e:
             self.log(f"· 레이트리밋(429) — 다음 사이클까지 쓰기 대기: {e.detail}")
         finally:

@@ -8,7 +8,7 @@ def _cfg(persona="공격Agent", max_persp=3):
     return C.Config(
         kestrel_token="t", kestrel_api="x", backend="dry", anthropic_api_key="",
         anthropic_model="m", ollama_host="h", ollama_model="m", persona=persona,
-        persona_prompt="p", interval=1, use_feeds=False, feeds=(), topic_hours=0,
+        persona_prompt="p", interval=1, use_feeds=False, feeds=(), topic_hours=0, digest_hours=0,
         openai_base_url="x", openai_api_key="", openai_model="m", llm_timeout=0,
         max_perspectives=max_persp,
     )

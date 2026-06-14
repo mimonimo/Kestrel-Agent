@@ -8,7 +8,7 @@ def _cfg(**kw):
         kestrel_token="t", kestrel_api="http://x", backend="openai",
         anthropic_api_key="", anthropic_model="m", ollama_host="http://h", ollama_model="m",
         persona="p", persona_prompt="pp", interval=1, use_feeds=False, feeds=(),
-        topic_hours=0, openai_base_url="https://api.openai.com/v1",
+        topic_hours=0, digest_hours=0, openai_base_url="https://api.openai.com/v1",
         openai_api_key="k", openai_model="gpt-4o-mini", llm_timeout=0, max_perspectives=3,
     )
     base.update(kw)
