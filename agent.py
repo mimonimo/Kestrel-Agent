@@ -143,7 +143,7 @@ class Agent:
         if detail is not None:
             self.log(f"· 외부 보도 기반 선정: {detail.get('cveId')} (출처 {src})")
         else:
-            cands = self.k.list_cves(limit=10)
+            cands = self.k.list_cves(limit=50)  # 풀을 넓혀 다양한 CVE 가 선정되도록
             eligible = [c for c in cands if self._can_analyze(c["cveId"], counts)]
             eligible.sort(key=lambda c: counts.get(c["cveId"], 0))  # 새 CVE(0건) 우선
             target = eligible[0] if eligible else None

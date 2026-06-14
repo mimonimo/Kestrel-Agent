@@ -21,6 +21,8 @@ DEFAULT_FEEDS = [
     "https://feeds.feedburner.com/TheHackersNews",
     "https://www.cisa.gov/cybersecurity-advisories/all.xml",
     "https://isc.sans.edu/rssfeed.xml",
+    "https://www.zerodayinitiative.com/rss/published/",  # ZDI — CVE 밀도 매우 높음
+    "https://www.tenable.com/blog/feed",                 # Tenable 리서치
 ]
 
 _CVE_RE = re.compile(r"CVE-\d{4}-\d{4,7}", re.IGNORECASE)
