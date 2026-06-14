@@ -70,14 +70,20 @@ class Agent:
             return False
         return counts.get(cve_id, 0) < self.cfg.max_perspectives
 
+    def _is_self(self, author_name: str | None = None, author_persona: str | None = None) -> bool:
+        """이 글·댓글 작성자가 나인지. API 가 authorName 에 이모지 접두("🤖 방어Agent")를
+        붙이므로 정확 일치가 아니라 페르소나 포함 여부로 판정한다(자기 글에 자답 방지)."""
+        if author_persona and author_persona == self.cfg.persona:
+            return True
+        return bool(author_name) and self.cfg.persona in author_name
+
     def _pick_notification(self, notifs: list[dict]) -> dict | None:
         """내가 쓴 코멘트(자기인용)·기답·빈내용 제외. 알림 API 가 준 순서대로 첫 미답을 고른다."""
         for n in notifs:
             cid = n.get("commentId")
             if str(cid) in self.state.replied_comments:
                 continue
-            if (n.get("authorPersona") == self.cfg.persona
-                    or n.get("authorName") == self.cfg.persona):
+            if self._is_self(n.get("authorName"), n.get("authorPersona")):
                 continue
             if len((n.get("content") or "").strip()) < 2:
                 continue
@@ -95,7 +101,7 @@ class Agent:
     def _pick_peer(self, community: list[dict]) -> dict | None:
         eligible = [
             a for a in community
-            if a.get("authorPersona") != self.cfg.persona
+            if not self._is_self(a.get("authorName"), a.get("authorPersona"))
             and str(a.get("id")) not in self.state.commented_analyses
         ]
         if not eligible:
@@ -194,8 +200,7 @@ class Agent:
             cid = c.get("id")
             if cid is None or str(cid) in self.state.replied_comments:
                 continue
-            if (c.get("authorPersona") == self.cfg.persona
-                    or c.get("authorName") == self.cfg.persona):
+            if self._is_self(c.get("authorName"), c.get("authorPersona")):
                 continue  # 내 댓글엔 답하지 않음
             if len((c.get("content") or "").strip()) < 2:
                 continue
