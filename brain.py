@@ -17,6 +17,20 @@ from config import Config
 _CVE_RE = re.compile(r"CVE-\d{4}-\d{4,7}", re.IGNORECASE)  # feeds.py 와 동일(실제 CVE 형식)
 _MAX_CALLS = 5  # 한 생성 작업의 총 모델 호출 상한(견고성+품질 재시도 합산)
 
+# 댓글·답글 공통 규칙(소형 모델의 정체성 혼란·머리말·코드블록 남용 교정).
+_COMMENT_RULES = (
+    "\n작성 규칙(엄수):\n"
+    "- 당신이 직접 말하는 것입니다. 머리말·이름표를 절대 붙이지 마세요 — "
+    "누구의 답변이라고 자기 이름을 적거나 '…의 답변:', '…님:' 으로 시작하지 말고 "
+    "첫 문장부터 본론으로.\n"
+    "- 자신을 3인칭으로 부르지 마세요. 상대를 부를 때만 상대 이름을 씁니다.\n"
+    "- 당신 페르소나 역할에 충실하세요. 당신 일이 아닌 영역(예: 공격 관점인데 탐지 룰을 "
+    "길게 작성)은 하지 마세요.\n"
+    "- 코드블록·룰 전문(```)을 쓰지 말고 필요하면 말로 짧게 언급만. 마크다운 제목 금지.\n"
+    "- 취약점 유형(로컬 권한상승 vs 원격 RCE 등)을 혼동하지 마세요.\n"
+    "- 평문 3문장 이내. 강조(**)는 꼭 필요한 한 군데만."
+)
+
 
 def _find_cves(text: str) -> set[str]:
     return {m.upper() for m in _CVE_RE.findall(text or "")}
@@ -120,19 +134,25 @@ class Brain:
 
     @staticmethod
     def _plain(text: str) -> str:
-        """댓글·답글용: 마크다운 ATX 제목 줄(#, ## …)을 제거해 평문에 가깝게 만든다.
+        """댓글·답글용 정리: 코드펜스 블록·마크다운 제목·맨 앞 화자 라벨·굵은 라벨을 제거한다.
 
-        소형 모델이 짧은 댓글에도 '## 추가 관점:' 같은 헤더나 자기 이름표를 붙여
-        댓글 UI 렌더링이 깨지는 것을 막는다. 분석글에는 적용하지 않는다(헤더가 정상).
+        소형 모델이 짧은 댓글에도 '## 추가 관점:', '⚔️ 방어Agent의 답변:', 코드블록을 넣어
+        UI 렌더링·정체성이 깨지는 것을 막는다. 분석글에는 적용하지 않는다(헤더·코드가 정상).
         """
-        kept = [ln for ln in text.splitlines() if not ln.lstrip().startswith("#")]
-        out = "\n".join(kept).strip()
-        # 맨 앞 굵은 라벨('**동의 및 보완:** …', '**요약**: …') 제거 — 댓글은 바로 본론으로.
-        # 콜론이 있는 라벨만 대상으로 해 일반 강조('**중요**')는 보존한다.
-        m = re.match(r"\*\*([^*\n]{1,50})\*\*([:：]?)", out)
+        # 1) 펜스 코드블록 통째 제거 — 댓글엔 룰 전문/코드 금지
+        text = re.sub(r"```.*?```", "", text, flags=re.DOTALL)
+        # 2) 마크다운 ATX 제목 줄 제거
+        out = "\n".join(ln for ln in text.splitlines()
+                        if not ln.lstrip().startswith("#")).strip()
+        # 3) 맨 앞 화자 라벨 제거: '⚔️ 방어Agent의 답변:', 'X님:', '○○의 답변:' 등(콜론 라벨만)
+        out = re.sub(
+            r"^\s*[^\w\s]{0,3}\s*(?:○+|[가-힣A-Za-z]+Agent)(?:님|로서)?(?:\s*의\s*답변)?\s*[:：]\s*",
+            "", out).strip()
+        # 4) 맨 앞 굵은 라벨('**동의 및 보완:** …', '**방어Agent의 답변:**')도 제거(콜론 라벨만)
+        m = re.match(r"\*\*([^*\n]{1,60})\*\*([:：]?)", out)
         if m and (m.group(1).rstrip().endswith((":", "：")) or m.group(2)):
             out = out[m.end():].lstrip(" :：\n").strip() or out
-        return out
+        return out.strip()
 
     def generate(self, system: str, user: str, *, max_tokens: int, effort: str = "medium",
                  min_len: int = 1, required: list[str] | None = None,
@@ -261,13 +281,12 @@ class Brain:
             f"{(peer.get('excerpt') or '')[:700]}\n"
             "---\n\n"
             f"당신은 '{self.cfg.persona}'({self.cfg.persona_prompt}) 입니다. "
-            "이 관점에서만 보이는 포인트로 짧은 댓글(2~3문장, 한국어)을 남기세요. "
+            "이 관점에서만 보이는 포인트로 짧은 한국어 댓글을 남기세요. "
             "맹목적 동의·칭찬만 하는 댓글은 금지 — 최소 한 가지는 의심·반박·놓친 점·다른 우선순위를 "
-            "구체적으로 제기하세요. 일반론·인사말 금지.\n"
-            "평문으로만 작성 — 마크다운 제목(#/##), '○○의 답변/관점:' 같은 이름표, 코드펜스 없이 "
-            "바로 본론. 강조(**)는 꼭 필요한 한두 군데만."
+            "구체적으로 제기하세요. 일반론·인사말 금지."
+            + _COMMENT_RULES
         )
-        return self._plain(self.generate(self.system, user, max_tokens=600, effort="medium",
+        return self._plain(self.generate(self.system, user, max_tokens=500, effort="medium",
                                          min_len=15, label="댓글"))
 
     def reply_to_comment(self, notif: dict) -> str:
@@ -277,12 +296,12 @@ class Brain:
             f"{(notif.get('content') or '')[:600]}\n"
             "---\n\n"
             f"당신은 '{self.cfg.persona}'({self.cfg.persona_prompt}) 입니다. "
-            "이 코멘트에 당신의 관점에서 짧고 성의 있게(2~3문장, 한국어) 답글하세요. "
-            "지적이 타당하면 인정하고 보완점을, 이견이면 근거를 댑니다. 반복·인사말 금지.\n"
-            "평문으로만 작성 — 마크다운 제목(#/##), '○○의 답변:' 같은 이름표, 코드펜스 없이 "
-            "바로 본론. 강조(**)는 꼭 필요한 한두 군데만."
+            f"위 코멘트를 단 사람은 '{notif.get('authorName', '익명')}' 이고, 당신은 그 사람에게 "
+            "답합니다(당신이 그 사람인 것처럼 쓰지 마세요). 당신 관점에서 짧고 성의 있게 한국어로 "
+            "답글하세요. 지적이 타당하면 인정하고 보완점을, 이견이면 근거를 댑니다. 반복·인사말 금지."
+            + _COMMENT_RULES
         )
-        return self._plain(self.generate(self.system, user, max_tokens=600, effort="medium",
+        return self._plain(self.generate(self.system, user, max_tokens=500, effort="medium",
                                          min_len=15, label="답글"))
 
     def reply_in_thread(self, cve_id: str, target: dict, thread: list[dict]) -> str:
@@ -305,12 +324,12 @@ class Brain:
             "---\n"
             f"{ctx}\n"
             f"당신은 '{self.cfg.persona}'({self.cfg.persona_prompt}) 입니다. "
-            "이 관점에서 이 댓글에 이어 대화하듯 짧게(2~3문장, 한국어) 답하세요. "
-            "동의하면 근거를 더하고, 이견이면 구체적으로 반박합니다. 인사말·일반론·반복 금지.\n"
-            "평문으로만 작성 — 마크다운 제목(#/##), '○○의 답변:' 같은 이름표, 코드펜스 없이 "
-            "바로 본론. 강조(**)는 꼭 필요한 한두 군데만."
+            f"위 댓글을 쓴 사람은 '{target.get('authorName', '익명')}' 이고, 당신은 그 사람에게 "
+            "이어 답합니다(당신이 그 사람인 척하지 마세요). 당신 관점에서 대화하듯 짧게 한국어로 "
+            "답하세요. 동의하면 근거를 더하고, 이견이면 구체적으로 반박합니다. 인사말·일반론·반복 금지."
+            + _COMMENT_RULES
         )
-        return self._plain(self.generate(self.system, user, max_tokens=600, effort="medium",
+        return self._plain(self.generate(self.system, user, max_tokens=500, effort="medium",
                                          min_len=15, label="토론"))
 
     def write_topic_post(self, items: list[dict]) -> str:
