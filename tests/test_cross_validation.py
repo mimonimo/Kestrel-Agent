@@ -120,23 +120,48 @@ class TestCrossValidation(unittest.TestCase):
         bb = Blackboard(cve_id="CVE-2021-44228")
         _record(bb, bad)
         cross_validation(bb, ctx)
-        # 3규칙 실패(severity-score, vector-score, products), 1규칙 통과(vector-format)
-        self.assertEqual(bb.validation.confidence, 0.25)
+        # confidence 는 확정 3규칙만: severity-score·vector-score 실패, vector-format 통과 → 1/3
+        self.assertEqual(bb.validation.confidence, 0.333)
         rules = {m["rule"] for m in bb.validation.mismatches}
-        self.assertEqual(rules, {"severity_score_band", "vector_score_match",
-                                 "products_description"})
+        self.assertEqual(rules, {"severity_score_band", "vector_score_match"})
+        # products 불일치는 mismatches 가 아니라 quality_flags 로만
+        self.assertNotIn("products_description", rules)
+        self.assertIn("products_description",
+                      {q["rule"] for q in bb.validation.quality_flags})
         self.assertEqual(bb.handoff, "enrichment")
-        # 보수적 채택: 명시 critical 과 점수구간 low 중 높은 쪽
         self.assertEqual(bb.validation.adopted_values["severity"], "critical")
 
-    def test_products_description_quality_flag(self):
+    def test_products_mismatch_is_quality_flag_not_confidence(self):
+        """products↔description 불일치만 있으면 confidence 는 1.0(3규칙 통과), handoff 없음."""
         ctx, d = self._ctx()
         rec = dict(_LOG4SHELL, products=["Totally Unrelated Widget"])
         bb = Blackboard(cve_id="CVE-2021-44228")
         _record(bb, rec)
         cross_validation(bb, ctx)
+        self.assertEqual(bb.validation.confidence, 1.0)
+        self.assertIsNone(bb.handoff)
+        self.assertFalse(bb.needs_human_review)
+        self.assertEqual(bb.validation.mismatches, [])
         self.assertIn("products_description",
-                      {m["rule"] for m in bb.validation.mismatches})
+                      {q["rule"] for q in bb.validation.quality_flags})
+
+    def test_supply_chain_context_in_quality_flag(self):
+        """Log4Shell 실데이터형(다운스트림 벤더 다수 + 라이브러리성 CWE) → 공급망 신호 표시."""
+        ctx, d = self._ctx()
+        rec = dict(_LOG4SHELL,
+                   products=["cisco fxos", "siemens 6bk1602_firmware", "vmware vcenter",
+                             "ibm qradar", "cisco ucs"],
+                   types=["CWE-917"])
+        bb = Blackboard(cve_id="CVE-2021-44228")
+        _record(bb, rec)
+        cross_validation(bb, ctx)
+        self.assertEqual(bb.validation.confidence, 1.0)  # 확정 3규칙엔 영향 없음
+        self.assertIsNone(bb.handoff)
+        flag = next(q for q in bb.validation.quality_flags
+                    if q["rule"] == "products_description")
+        self.assertEqual(flag["products_count"], 5)
+        self.assertTrue(flag["library_like_cwe"])       # CWE-917
+        self.assertTrue(flag["likely_supply_chain"])
 
     def test_no_data_is_noop(self):
         ctx, d = self._ctx()
@@ -159,6 +184,10 @@ class TestCrossValidation(unittest.TestCase):
         self.assertEqual(ev["cveId"], "CVE-2021-44228")
         self.assertEqual(ev["confidence"], 1.0)
         self.assertIn("ts", ev)
+        # confidence 규칙(3개)과 quality_flags 가 분리 기록됨
+        self.assertEqual([r["rule"] for r in ev["rules"]],
+                         ["severity_score_band", "vector_format", "vector_score_match"])
+        self.assertIn("quality_flags", ev)
 
 
 # ── 엔드투엔드(supervisor 경유) ────────────────────────────

@@ -15,10 +15,16 @@ from dataclasses import dataclass, field
 
 @dataclass
 class ValidationResult:
-    """Cross-Validation 결과 — 소스 간 불일치 탐지 + 보수적 채택 + 규칙 기반 신뢰도."""
+    """Cross-Validation 결과 — 소스 간 불일치 탐지 + 보수적 채택 + 규칙 기반 신뢰도.
+
+    confidence 는 결정론적으로 확실한 규칙(severity_score_band/vector_format/
+    vector_score_match)만으로 산출한다. quality_flags 는 confidence·handoff 에 반영하지
+    않는 참고용 데이터 품질 신호(예: products↔description 불일치 — 공급망 CVE 오탐 소지).
+    """
     confidence: float = 0.0
     mismatches: list[dict] = field(default_factory=list)
     adopted_values: dict = field(default_factory=dict)
+    quality_flags: list[dict] = field(default_factory=list)
 
 
 @dataclass
