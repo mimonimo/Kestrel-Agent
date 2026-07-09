@@ -172,7 +172,7 @@ class Agent:
         # 과거 내 분석을 단순 최신순이 아니라 *이 CVE 와 관련된 것* 을 앞세워 전달해,
         # 새 분석이 기존 판단을 이어받아 더 깊어지도록(누적·고도화) 유도한다.
         mem_ctx = self._build_memory_context(cid)
-        body = self.brain.analyze_cve(detail, context=context, memory=mem_ctx)
+        body = self._make_analysis_body(detail, context, mem_ctx)
         if len(body.strip()) < 20:
             self.log(f"  분석 본문이 너무 짧아 건너뜀: {cid}")
             return
@@ -183,6 +183,67 @@ class Agent:
         self.state.memory = self.state.memory[-20:]
         self.state.save()  # 게시 직후 즉시 저장 — 갑작스런 종료에도 재분석 방지
         self.log(f"  ✅ 게시 완료 {cid} (analysisId={out.get('id')})")
+
+    # ── 분석 본문 생성: 기본은 brain, USE_PIPELINE=True 면 계층 2 파이프라인(4b) ──
+    def _make_analysis_body(self, detail: dict, context: str, mem_ctx: str) -> str:
+        """분석 본문(contentMd)을 만든다.
+
+        USE_PIPELINE=False(기본)면 기존 brain 경로 그대로 — 아무것도 바뀌지 않는다.
+        True 면 계층 2 파이프라인을 돌려 report 를 contentMd 로 변환한다. 파이프라인이
+        실패하면 ""(빈 문자열)을 돌려 호출부가 이번 사이클 게시를 건너뛰게 한다
+        (자동 폴백 없음 — 상태를 오염시키지 않고 다음 사이클에 재시도)."""
+        if not getattr(self.cfg, "use_pipeline", False):
+            return self.brain.analyze_cve(detail, context=context, memory=mem_ctx)
+        return self._analysis_via_pipeline(detail)
+
+    def _analysis_via_pipeline(self, detail: dict) -> str:
+        from pipeline.state import Blackboard, PipelineContext  # noqa: PLC0415
+        from pipeline.supervisor import run_pipeline  # noqa: PLC0415
+
+        cid = detail.get("cveId")
+        bb = Blackboard(cve_id=cid, persona=self.cfg.persona)
+        # 봇이 이미 쓰는 kestrel·llm 클라이언트를 재사용(새 클라이언트 만들지 않음).
+        ctx = PipelineContext(kestrel=self.k, llm=getattr(self.brain, "client", None))
+        try:
+            run_pipeline(bb, ctx)
+        except Exception as e:  # noqa: BLE001 — 한 CVE 실패가 봇 루프를 멈추지 않게
+            self.log(f"  · 파이프라인 실행 실패({type(e).__name__}) — 이번 사이클 스킵")
+            return ""
+        if bb.needs_retry or not (bb.report.attack or bb.report.mitigation):
+            self.log(f"  · 파이프라인 결과 미완(needs_retry={bb.needs_retry}) — 이번 사이클 스킵")
+            return ""
+        return self._pipeline_report_to_md(bb)
+
+    @staticmethod
+    def _pipeline_report_to_md(bb) -> str:
+        """파이프라인 blackboard → 기존 publish_analysis 용 마크다운(contentMd).
+
+        요약·위험도/우선순위 헤더를 포함해 기존 _key_points(메모리 누적)와도 호환되게 한다.
+        """
+        r, ex, pr = bb.report, bb.exploitability, bb.priority
+        adopted = bb.validation.adopted_values or {}
+        enriched = bb.enriched or {}
+        parts: list[str] = []
+        if r.summary_en:
+            parts.append(f"> {r.summary_en}\n")
+        sev = adopted.get("severity") or enriched.get("severity") or "미상"
+        parts.append("## 📋 요약")
+        parts.append(
+            f"- 심각도 {sev} · CVSS {adopted.get('cvssScore', '미상')} · "
+            f"EPSS {ex.epss if ex.epss is not None else '미확보'} · "
+            f"악용난이도 {ex.grade or '미상'}"
+            f"{' · KEV' if enriched.get('kev') else ''}")
+        parts.append("\n## 🔍 공격 기법")
+        parts.append(r.attack or "추정: 제공된 정보로는 상세 공격 기법을 확정하기 어렵습니다.")
+        if ex.narrative:
+            parts.append(f"\n**악용 가능성**: {ex.narrative}")
+        parts.append("\n## 🛡️ 완화 방안")
+        parts.append(r.mitigation or "벤더 패치 적용과 노출면 점검을 우선하세요.")
+        parts.append("\n## ⚖️ 위험도 / 우선순위")
+        parts.append(f"- 조치: {pr.action or '미상'} ({pr.timeline or '미상'})")
+        if pr.reasoning:
+            parts.append(f"- 근거: {pr.reasoning}")
+        return "\n".join(parts).strip()
 
     # ── 분석 누적·고도화 헬퍼 ─────────────────────────────────
     @staticmethod

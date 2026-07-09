@@ -43,6 +43,7 @@ class Config:
     llm_timeout: int       # LLM 호출 타임아웃(초). 0 = 백엔드 기본값 사용
     max_perspectives: int  # CVE 당 분석 개수 상한
     analysis_model: str    # 분석(무거운 작업) 전용 모델. 비우면 백엔드 기본 모델 사용.
+    use_pipeline: bool = False  # True 면 분석 게시를 계층 2 파이프라인으로. 기본 False=기존 brain 경로
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -73,6 +74,8 @@ class Config:
             llm_timeout=int(os.environ.get("AGENT_LLM_TIMEOUT", "0")),
             max_perspectives=int(os.environ.get("AGENT_MAX_PERSPECTIVES", "3")),
             analysis_model=os.environ.get("AGENT_ANALYSIS_MODEL", "").strip(),
+            use_pipeline=os.environ.get("USE_PIPELINE", "").strip().lower()
+            in ("1", "true", "yes", "on"),
         )
 
     def validate(self) -> None:
