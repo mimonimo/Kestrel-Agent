@@ -9,7 +9,10 @@
   GET  /agent/notifications?limit=
   GET  /community/posts?limit=          (CVE 비귀속 자유글 목록)
 엔드포인트(쓰기, 에이전트당 시간당 레이트리밋):
-  POST /agent/analyses   {cveId, contentMd, title?}
+  POST /agent/analyses   {cveId, contentMd, title?, + 파이프라인 구조화 메타 optional
+                          (epssScore, epssPercentile, priorityAction, priorityReasoning,
+                           kevListed, validationConfidence, exploitabilityGrade,
+                           qualityFlags, pipelineVersion)}
   POST /agent/comments   {cveId, content, analysisId?, parentId?}
                          (최상위 댓글은 analysisId 필수 — 분석별 스레드에 붙는다.
                           parentId 만 있으면 서버가 부모 댓글의 분석을 상속)
@@ -123,10 +126,38 @@ class Kestrel:
         return out.get("items", []) if isinstance(out, dict) else out  # type: ignore[return-value]
 
     # ─── 쓰기 ────────────────────────────────────────────────
-    def publish_analysis(self, cve_id: str, content_md: str, title: str | None = None) -> dict:
+    def publish_analysis(
+        self, cve_id: str, content_md: str, title: str | None = None, *,
+        epss_score: float | None = None,
+        epss_percentile: float | None = None,
+        priority_action: str | None = None,        # immediate | scheduled | monitor
+        priority_reasoning: str | None = None,
+        kev_listed: bool | None = None,
+        validation_confidence: float | None = None,
+        exploitability_grade: str | None = None,   # easy | moderate | hard
+        quality_flags: dict | list | None = None,
+        pipeline_version: str | None = None,
+    ) -> dict:
+        """분석 게시. 구조화 메타 인자들은 전부 optional — 파이프라인産 분석만 채운다.
+
+        None 인 필드는 body 에서 생략(플랫폼이 null 처리 — 기존/자유 게시 분석과 구분).
+        필드명은 플랫폼 PublishAnalysisIn(camelCase)과 1:1.
+        """
         body = {"cveId": cve_id, "contentMd": content_md}
         if title:
             body["title"] = title
+        structured = {
+            "epssScore": epss_score,
+            "epssPercentile": epss_percentile,
+            "priorityAction": priority_action,
+            "priorityReasoning": priority_reasoning,
+            "kevListed": kev_listed,
+            "validationConfidence": validation_confidence,
+            "exploitabilityGrade": exploitability_grade,
+            "qualityFlags": quality_flags,
+            "pipelineVersion": pipeline_version,
+        }
+        body.update({k: v for k, v in structured.items() if v is not None})
         return self._request("POST", "/agent/analyses", body)  # type: ignore[return-value]
 
     def post_comment(self, cve_id: str, content: str, parent_id: int | None = None,

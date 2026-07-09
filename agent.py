@@ -37,6 +37,10 @@ from state import State
 # 한 사이클에 댓글 스레드를 훑어볼 CVE 개수 상한(쓰기 레이트리밋·생성 비용 보호).
 _THREAD_SCAN = 4
 
+# 파이프라인産 분석의 게시 메타에 실리는 버전 표식 — 플랫폼/논문에서 어느 파이프라인이
+# 생성했는지 추적한다. 파이프라인 산출 스키마가 바뀌면 올린다.
+PIPELINE_VERSION = "kestrel-agent-pipeline-v1"
+
 
 def _log(tag: str, msg: str) -> None:
     print(f"{time.strftime('%H:%M:%S')} [{tag}] {msg}", flush=True)
@@ -172,11 +176,11 @@ class Agent:
         # 과거 내 분석을 단순 최신순이 아니라 *이 CVE 와 관련된 것* 을 앞세워 전달해,
         # 새 분석이 기존 판단을 이어받아 더 깊어지도록(누적·고도화) 유도한다.
         mem_ctx = self._build_memory_context(cid)
-        body = self._make_analysis_body(detail, context, mem_ctx)
+        body, meta = self._make_analysis_body(detail, context, mem_ctx)
         if len(body.strip()) < 20:
             self.log(f"  분석 본문이 너무 짧아 건너뜀: {cid}")
             return
-        out = self.k.publish_analysis(cid, body)
+        out = self.k.publish_analysis(cid, body, **meta)
         self.state.analyzed_cves.add(cid)
         # 메모리 기록 — 핵심 요지(요약·위험도 결론)를 풍부하게 남겨 다음 분석이 이어받게 한다.
         self.state.memory.append(f"{cid}({detail.get('severity')}): {self._key_points(body)}")
@@ -185,18 +189,21 @@ class Agent:
         self.log(f"  ✅ 게시 완료 {cid} (analysisId={out.get('id')})")
 
     # ── 분석 본문 생성: 기본은 brain, USE_PIPELINE=True 면 계층 2 파이프라인(4b) ──
-    def _make_analysis_body(self, detail: dict, context: str, mem_ctx: str) -> str:
-        """분석 본문(contentMd)을 만든다.
+    def _make_analysis_body(self, detail: dict, context: str,
+                            mem_ctx: str) -> tuple[str, dict]:
+        """(분석 본문 contentMd, publish_analysis 용 구조화 메타 kwargs)를 만든다.
 
-        USE_PIPELINE=False(기본)면 기존 brain 경로 그대로 — 아무것도 바뀌지 않는다.
-        True 면 계층 2 파이프라인을 돌려 report 를 contentMd 로 변환한다. 파이프라인이
+        USE_PIPELINE=False(기본)면 기존 brain 경로 그대로 — 본문만 있고 메타는 {}
+        (구조화 데이터가 없으므로 아무 필드도 보내지 않는다, 회귀 0).
+        True 면 계층 2 파이프라인을 돌려 report 를 contentMd 로 변환하고 blackboard 의
+        구조화 값(EPSS·우선순위·검증 신뢰도 등)을 메타로 함께 낸다. 파이프라인이
         실패하면 ""(빈 문자열)을 돌려 호출부가 이번 사이클 게시를 건너뛰게 한다
         (자동 폴백 없음 — 상태를 오염시키지 않고 다음 사이클에 재시도)."""
         if not getattr(self.cfg, "use_pipeline", False):
-            return self.brain.analyze_cve(detail, context=context, memory=mem_ctx)
+            return self.brain.analyze_cve(detail, context=context, memory=mem_ctx), {}
         return self._analysis_via_pipeline(detail)
 
-    def _analysis_via_pipeline(self, detail: dict) -> str:
+    def _analysis_via_pipeline(self, detail: dict) -> tuple[str, dict]:
         from pipeline.state import Blackboard, PipelineContext  # noqa: PLC0415
         from pipeline.supervisor import run_pipeline  # noqa: PLC0415
 
@@ -208,11 +215,38 @@ class Agent:
             run_pipeline(bb, ctx)
         except Exception as e:  # noqa: BLE001 — 한 CVE 실패가 봇 루프를 멈추지 않게
             self.log(f"  · 파이프라인 실행 실패({type(e).__name__}) — 이번 사이클 스킵")
-            return ""
+            return "", {}
         if bb.needs_retry or not (bb.report.attack or bb.report.mitigation):
             self.log(f"  · 파이프라인 결과 미완(needs_retry={bb.needs_retry}) — 이번 사이클 스킵")
-            return ""
-        return self._pipeline_report_to_md(bb)
+            return "", {}
+        return self._pipeline_report_to_md(bb), self._pipeline_publish_meta(bb)
+
+    @staticmethod
+    def _pipeline_publish_meta(bb) -> dict:
+        """blackboard 구조화 값 → publish_analysis 의 구조화 메타 kwargs.
+
+        None 은 애초에 빼서 요청 body 에 실리지 않게 한다(플랫폼이 null 처리).
+        quality_flags 는 blackboard 의 list[dict] 를 rule명 키의 dict 로 변환
+        (플랫폼 스키마 dict[str,Any] 수용, 신호별 맥락 보존).
+        validation_confidence 는 검증 규칙이 실제로 돌았을 때만 보낸다 —
+        검증할 데이터가 없어 조용히 통과한 경우 기본값 0.0 을 보내면 오독이므로 생략."""
+        v, ex, pr = bb.validation, bb.exploitability, bb.priority
+        kev = bb.primary_record().get("kevListed")
+        validated = bool(v.adopted_values or v.mismatches or v.quality_flags)
+        quality = {f.get("rule", f"flag_{i}"): f
+                   for i, f in enumerate(v.quality_flags)} or None
+        meta = {
+            "epss_score": ex.epss,
+            "epss_percentile": ex.epss_percentile,
+            "priority_action": pr.action,
+            "priority_reasoning": pr.reasoning or None,
+            "kev_listed": bool(kev) if kev is not None else None,
+            "validation_confidence": v.confidence if validated else None,
+            "exploitability_grade": ex.grade,
+            "quality_flags": quality,
+            "pipeline_version": PIPELINE_VERSION,
+        }
+        return {k: val for k, val in meta.items() if val is not None}
 
     @staticmethod
     def _pipeline_report_to_md(bb) -> str:

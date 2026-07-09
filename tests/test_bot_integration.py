@@ -41,7 +41,8 @@ class FakeKestrel:
     def related(self, cid):
         return []
 
-    def publish_analysis(self, cid, body):
+    def publish_analysis(self, cid, body, title=None, **structured):
+        # 실제 클라이언트처럼 구조화 메타 kwargs 를 수용(상세 검증은 test_publish_structured)
         self.published.append((cid, body))
         return {"id": "A1"}
 

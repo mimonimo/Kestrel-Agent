@@ -37,6 +37,7 @@ class ExploitabilityResult:
     grade: str | None = None          # easy | moderate | hard (규칙 산출)
     poc_available: bool | None = None  # Exploit-DB 연동 전에는 None(KEV 로 대체 판단)
     epss: float | None = None          # FIRST.org EPSS 확률(미확보 시 None)
+    epss_percentile: float | None = None  # 전역 EPSS 분포에서의 위치(0~1, 미확보 시 None)
     reasoning: str = ""               # 규칙 근거(결정론)
     narrative: str = ""               # LLM 서술(persona 렌즈). 실패/미주입 시 빈 문자열
 
