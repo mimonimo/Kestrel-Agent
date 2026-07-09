@@ -184,10 +184,49 @@ class TestPrioritization(unittest.TestCase):
         self.assertEqual(bb.priority.action, "immediate")
         self.assertIn("KEV", bb.priority.reasoning)
 
-    def test_out_of_scope_downgrades(self):
-        bb = self._prep(in_scope=False)
+    def _prep_nonkev(self, persona="분석가Agent", epss=0.6, in_scope=None):
+        rec = dict(_LOG4, kevListed=False, cvssScore=8.0)
+        bb = _bb_with_primary(rec, persona=persona)
+        enrichment(bb, PipelineContext())
+        exploitability(bb, PipelineContext(epss_fetch=lambda cid: {"epss": epss}))
+        bb.context.in_scope = in_scope
+        return bb
+
+    def test_out_of_scope_downgrades_non_kev(self):
+        bb = self._prep_nonkev(in_scope=False)  # immediate(EPSS≥0.5) → 한 단계 하향
         prioritization(bb, PipelineContext())
-        self.assertEqual(bb.priority.action, "scheduled")  # immediate → 한 단계 하향
+        self.assertEqual(bb.priority.action, "scheduled")
+
+    def test_double_downgrade_capped_at_one_step(self):
+        # non-KEV, in_scope=False + defensive → 두 하향이 겹쳐도 최대 1단계(monitor 아님)
+        bb = self._prep_nonkev(persona="방어Agent", in_scope=False)
+        prioritization(bb, PipelineContext())
+        self.assertEqual(bb.priority.action, "scheduled")
+
+    def test_kev_floor_prevents_monitor(self):
+        # 핵심 회귀 방지: KEV + in_scope=False + defensive 라도 monitor 로 안 내려감
+        bb = self._prep(persona="방어Agent", epss=0.3, in_scope=False)  # EPSS<0.9
+        prioritization(bb, PipelineContext())
+        self.assertEqual(bb.priority.action, "scheduled")
+        self.assertNotEqual(bb.priority.action, "monitor")
+
+    def test_kev_high_epss_floor_to_immediate(self):
+        bb = self._prep(persona="방어Agent", epss=0.99, in_scope=False)
+        prioritization(bb, PipelineContext())
+        self.assertEqual(bb.priority.action, "immediate")
+        self.assertIn("KEV floor applied", bb.priority.reasoning)
+
+    def test_non_kev_has_no_floor(self):
+        # KEV=False 는 기존 하향 로직 그대로(floor 없음) — monitor 까지 내려갈 수 있음
+        rec = dict(_LOG4, kevListed=False, cvssScore=5.0,
+                   cvssVector="CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N")
+        bb = _bb_with_primary(rec, persona="방어Agent")
+        enrichment(bb, PipelineContext())
+        exploitability(bb, PipelineContext(epss_fetch=lambda cid: {"epss": 0.2}))
+        bb.context.in_scope = False
+        prioritization(bb, PipelineContext())
+        self.assertEqual(bb.priority.action, "monitor")
+        self.assertNotIn("KEV floor", bb.priority.reasoning)
 
     def test_persona_offensive_vs_defensive_diverge(self):
         # 저심각·비KEV·자산밖 경계 케이스에서 관점이 갈리게
