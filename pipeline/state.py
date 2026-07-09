@@ -53,9 +53,15 @@ class PriorityResult:
 
 @dataclass
 class ReportResult:
-    """Report 결과 — 로컬 LLM 이 페르소나 렌즈로 쓴 공격·완화 서술."""
+    """Report 결과 — 로컬 LLM 이 페르소나 렌즈로 쓴 공격·완화 서술.
+
+    meta 에는 model(모델명)·elapsed_sec(소요시간)·persona·error(있으면) 를 담는다.
+    """
     attack: str = ""
     mitigation: str = ""
+    summary_en: str = ""            # 영어 요약 한 줄(논문·해외 공유용)
+    lang: str = ""                  # 산출 언어 표기(예: ko+en)
+    meta: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -76,6 +82,7 @@ class Blackboard:
     handoff: str | None = None          # 에이전트가 되돌려 보내고 싶은 대상 이름
     handoff_count: int = 0              # 누적 회귀 횟수(한도 초과 시 사람 검토)
     needs_human_review: bool = False
+    needs_retry: bool = False           # LLM 호출 실패 등 일시적 사유로 재시도가 필요함
     audit_log: list[dict] = field(default_factory=list)  # [{agent, status}]
 
     def primary_record(self) -> dict:
@@ -94,6 +101,8 @@ class PipelineContext:
     """에이전트 공유 외부 자원. 스텁 단계에서는 쓰이지 않으며 계층 1 연결 시 주입한다."""
     cfg: object | None = None       # config.Config
     kestrel: object | None = None   # kestrel_client.Kestrel
-    brain: object | None = None     # brain.Brain (Report 노드의 LLM 서술용)
+    brain: object | None = None     # brain.Brain (계층 1 연결용, Report 는 llm 을 직접 씀)
+    llm: object | None = None       # llm.LLMClient (Report 노드가 그대로 재사용)
     assets: list[str] = field(default_factory=list)  # 사용자 자산 CPE 목록(Context 매칭용)
     data_dir: str | None = None     # 산출물(validation_events.jsonl 등) 기록 위치. None → repo 루트
+    report_lang: str = "ko"         # Report 본문 언어(ko|en). 항상 영어 요약 한 줄은 함께 낸다
