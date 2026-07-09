@@ -194,7 +194,8 @@ class TestCrossValidation(unittest.TestCase):
 class TestEndToEnd(unittest.TestCase):
     def test_full_pipeline_consistent(self):
         d = tempfile.mkdtemp()
-        ctx = PipelineContext(kestrel=FakeKestrel(_LOG4SHELL), data_dir=d)
+        ctx = PipelineContext(kestrel=FakeKestrel(_LOG4SHELL), data_dir=d,
+                              epss_fetch=lambda cid: None)  # 네트워크 차단(hermetic)
         bb = Blackboard(cve_id="CVE-2021-44228", persona="공격Agent")
         Supervisor().run(bb, ctx)
         self.assertEqual(bb.validation.confidence, 1.0)
@@ -208,7 +209,8 @@ class TestEndToEnd(unittest.TestCase):
     def test_full_pipeline_inconsistent_escalates(self):
         d = tempfile.mkdtemp()
         bad = dict(_LOG4SHELL, cvssScore=2.0)  # severity critical ↔ score low
-        ctx = PipelineContext(kestrel=FakeKestrel(bad), data_dir=d)
+        ctx = PipelineContext(kestrel=FakeKestrel(bad), data_dir=d,
+                              epss_fetch=lambda cid: None)  # 네트워크 차단(hermetic)
         bb = Blackboard(cve_id="CVE-2021-44228")
         Supervisor().run(bb, ctx)
         # cross_validation 이 enrichment 로 반복 회귀 → 한도 초과 → 사람 검토

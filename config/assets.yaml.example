@@ -1,0 +1,14 @@
+# 사용자 자산 인벤토리 (로컬 전용 — 플랫폼에 올라가지 않습니다).
+# 이 파일을 config/assets.yaml 로 복사한 뒤 실제 보유 자산으로 채우세요.
+#
+# 형식: 단순 리스트. 각 항목은 CPE 문자열 또는 제품명 문자열.
+#   (전체 YAML 문법이 아니라 '- 항목' 리스트만 파싱합니다.)
+# Context 노드가 이 목록을 CVE 의 영향 제품(products)과 매칭해
+#   in_scope(우리 자산에 해당하는지)와 affected_assets(매칭된 항목)를 산출합니다.
+# 파일이 없거나 비어 있으면 in_scope=None(자산 미등록)으로 필터 없이 통과합니다.
+assets:
+  - cpe:2.3:a:apache:log4j:*:*:*:*:*:*:*:*
+  - "Apache Log4j2"
+  - cpe:2.3:a:vmware:vcenter_server:*:*:*:*:*:*:*:*
+  - Microsoft Exchange Server
+  - cpe:2.3:a:fortinet:fortios:*:*:*:*:*:*:*:*

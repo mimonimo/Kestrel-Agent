@@ -8,6 +8,10 @@ state.json
 state_*.json
 *.log
 validation_events.jsonl
+epss_cache.json
+
+# 사용자 자산 인벤토리(로컬 전용) — 예시만 커밋
+config/assets.yaml
 
 # 멀티 에이전트: 실제 프로필(토큰 포함)·토큰 캐시
 agents.json
