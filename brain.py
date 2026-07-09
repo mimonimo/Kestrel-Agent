@@ -107,6 +107,8 @@ class Brain:
         self.cfg = cfg
         self.client = client
         self.system = _persona_system(cfg)
+        # 분석(무거운 작업) 전용 모델. 비어 있으면 None → 백엔드 기본 모델 사용.
+        self.analysis_model = getattr(cfg, "analysis_model", "") or None
         self.log = lambda *_: None  # agent 가 주입(폴백/재시도 로깅용)
 
     @staticmethod
@@ -157,13 +159,14 @@ class Brain:
     def generate(self, system: str, user: str, *, max_tokens: int, effort: str = "medium",
                  min_len: int = 1, required: list[str] | None = None,
                  allowed_cves: set[str] | None = None, redact: bool = True,
-                 label: str = "gen") -> str:
+                 label: str = "gen", model: str | None = None) -> str:
         """총 _MAX_CALLS 회 예산 안에서 호출→정제→검증→재시도. 실패 시 안전 폴백."""
         user2 = user
         best = ""
         for _ in range(_MAX_CALLS):
             try:
-                raw = self.client.complete(system, user2, max_tokens=max_tokens, effort=effort)
+                raw = self.client.complete(system, user2, max_tokens=max_tokens,
+                                           effort=effort, model=model)
             except Exception as e:  # noqa: BLE001 — llm.LLMError 포함
                 if getattr(e, "fatal", False):
                     raise
@@ -195,8 +198,12 @@ class Brain:
             if context.strip() else ""
         )
         mem = (
-            "\n=== 당신이 최근 다룬 것(같은 얘기 반복 금지 — 관련 있으면 그때 판단을 이어 발전시키세요) ===\n"
-            + memory.strip() + "\n================\n"
+            "\n=== 당신이 과거에 내린 분석·판단(아래는 당신의 이전 결론입니다) ===\n"
+            + memory.strip() + "\n"
+            "위 과거 분석을 *이어받아 더 깊게* 가세요: 같은 설명을 반복하지 말고, 관련된 CVE·"
+            "취약점 클래스가 있으면 그때의 판단을 인용·연결하고(예: 'CVE-XXXX 에서 본 패턴과 동일/상이'), "
+            "그 위에 이번 CVE 에서 새로 추가되는 통찰·우선순위 변화·교차 위협을 더하세요.\n"
+            "================\n"
             if memory.strip() else ""
         )
         ext_rule = (
@@ -271,6 +278,7 @@ class Brain:
             min_len=400,
             required=["요약", "영향", "공격", "예시|PoC", "탐지", "방어", "위험도|우선순위"],
             allowed_cves={(detail.get("cveId") or "").upper()} - {""}, label="분석",
+            model=self.analysis_model,
         )
 
     def comment_on_peer(self, peer: dict) -> str:
@@ -363,7 +371,7 @@ class Brain:
         allowed = {(it.get("cveId") or "").upper() for it in items} - {""}
         return self.generate(self.system, user, max_tokens=900, effort="medium",
                              min_len=150, required=["동향|요약", "권고"],
-                             allowed_cves=allowed, label="자유글")
+                             allowed_cves=allowed, label="자유글", model=self.analysis_model)
 
     def write_community_digest(self, analyses: list[dict]) -> str:
         """커뮤니티에 올라온 *실제 분석글들*을 엮어 '쟁점 종합' 자유글을 쓴다.
@@ -395,7 +403,7 @@ class Brain:
         )
         return self.generate(self.system, user, max_tokens=900, effort="medium",
                              min_len=150, required=["쟁점", "입장", "권고"],
-                             allowed_cves=allowed, label="종합")
+                             allowed_cves=allowed, label="종합", model=self.analysis_model)
 
 
 class DryBrain(Brain):

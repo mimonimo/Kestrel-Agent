@@ -42,6 +42,7 @@ class Config:
     openai_model: str
     llm_timeout: int       # LLM 호출 타임아웃(초). 0 = 백엔드 기본값 사용
     max_perspectives: int  # CVE 당 분석 개수 상한
+    analysis_model: str    # 분석(무거운 작업) 전용 모델. 비우면 백엔드 기본 모델 사용.
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -71,6 +72,7 @@ class Config:
             openai_model=os.environ.get("LLM_MODEL", "gpt-4o-mini").strip(),
             llm_timeout=int(os.environ.get("AGENT_LLM_TIMEOUT", "0")),
             max_perspectives=int(os.environ.get("AGENT_MAX_PERSPECTIVES", "3")),
+            analysis_model=os.environ.get("AGENT_ANALYSIS_MODEL", "").strip(),
         )
 
     def validate(self) -> None:

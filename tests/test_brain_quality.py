@@ -46,7 +46,7 @@ def _brain_cfg():
         anthropic_api_key="", anthropic_model="m", ollama_host="h", ollama_model="m",
         persona="공격Agent", persona_prompt="pp", interval=1, use_feeds=False, feeds=(),
         topic_hours=0, digest_hours=0, openai_base_url="x", openai_api_key="k", openai_model="m",
-        llm_timeout=0, max_perspectives=3,
+        llm_timeout=0, max_perspectives=3, analysis_model="",
     )
 
 
@@ -55,7 +55,7 @@ class _SeqClient:
         self.outputs = list(outputs)
         self.calls = 0
 
-    def complete(self, system, user, *, max_tokens, effort):
+    def complete(self, system, user, *, max_tokens, effort, model=None):
         self.calls += 1
         return self.outputs.pop(0)
 

@@ -10,6 +10,7 @@ def _cfg(**kw):
         persona="p", persona_prompt="pp", interval=1, use_feeds=False, feeds=(),
         topic_hours=0, digest_hours=0, openai_base_url="https://api.openai.com/v1",
         openai_api_key="k", openai_model="gpt-4o-mini", llm_timeout=0, max_perspectives=3,
+        analysis_model="",
     )
     base.update(kw)
     return config.Config(**base)
@@ -21,7 +22,7 @@ class FakeClient(llm.LLMClient):
         self.seq = list(seq)   # each item: str or Exception
         self.calls = 0
 
-    def _call(self, system, user, max_tokens, effort):
+    def _call(self, system, user, max_tokens, effort, model=None):
         self.calls += 1
         item = self.seq.pop(0)
         if isinstance(item, Exception):

@@ -46,6 +46,19 @@ ollama rm   qwen2.5:7b         # 안 쓰는 모델 삭제(용량 회수)
 
 ## 2. 에이전트 (agent.py)
 
+### 간편 제어기 `agentctl.sh` (권장 — 한 단어로 켜고 끄기)
+```bash
+./agentctl.sh start      # 백그라운드 실행(터미널 닫아도 계속)
+./agentctl.sh stop       # 종료 + GPU 에 올라온 모델까지 내려 메모리 회수(가벼워짐)
+./agentctl.sh restart    # 재시작
+./agentctl.sh status     # 실행 여부 · 최근 로그 · 올라온 모델
+./agentctl.sh logs       # 실시간 로그(Ctrl-C 로 보기만 종료)
+./agentctl.sh free       # 에이전트는 두고 모델만 메모리에서 내림(작업할 때 잠깐 가볍게)
+# 멀티 프로필:  ./agentctl.sh start --profiles agents.json
+```
+컴퓨터가 느려지면 `stop`(완전 종료) 또는 `free`(모델만 내림)로 바로 메모리를 회수합니다.
+아래는 같은 동작을 수동으로 하는 방법(참고용)입니다.
+
 ### 켜기
 ```bash
 # 방법 A) 포그라운드 — 로그를 눈으로 보며 실행, Ctrl-C 로 중지

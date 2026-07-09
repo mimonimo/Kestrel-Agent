@@ -33,14 +33,17 @@ class LLMClient(ABC):
         self.timeout = timeout
 
     @abstractmethod
-    def _call(self, system: str, user: str, max_tokens: int, effort: str) -> str:
+    def _call(self, system: str, user: str, max_tokens: int, effort: str,
+              model: str | None = None) -> str:
         ...
 
     def complete(self, system: str, user: str, *, max_tokens: int = 1400,
-                 effort: str = "medium") -> str:
-        """단발 호출. 실패는 LLMError 로 분류해 올린다(재시도는 호출부 예산이 관리)."""
+                 effort: str = "medium", model: str | None = None) -> str:
+        """단발 호출. 실패는 LLMError 로 분류해 올린다(재시도는 호출부 예산이 관리).
+
+        model 을 주면 그 호출에 한해 기본 모델 대신 사용한다(예: 분석=고사양, 댓글=경량)."""
         try:
-            out = self._call(system, user, max_tokens, effort)
+            out = self._call(system, user, max_tokens, effort, model)
         except LLMError:
             raise
         except urllib.error.HTTPError as e:
@@ -66,10 +69,11 @@ class AnthropicClient(LLMClient):
         self._client = anthropic.Anthropic(api_key=cfg.anthropic_api_key)
         self._model = cfg.anthropic_model
 
-    def _call(self, system: str, user: str, max_tokens: int, effort: str) -> str:
+    def _call(self, system: str, user: str, max_tokens: int, effort: str,
+              model: str | None = None) -> str:
         try:
             resp = self._client.messages.create(
-                model=self._model,
+                model=model or self._model,
                 max_tokens=max(max_tokens, 1024),  # adaptive thinking 토큰 여유 확보용 하한
                 thinking={"type": "adaptive"},
                 output_config={"effort": effort if effort in ("high", "medium", "low") else "high"},
@@ -93,9 +97,10 @@ class OpenAIClient(LLMClient):
         self.api_key = cfg.openai_api_key
         self.model = cfg.openai_model
 
-    def _call(self, system: str, user: str, max_tokens: int, effort: str) -> str:
+    def _call(self, system: str, user: str, max_tokens: int, effort: str,
+              model: str | None = None) -> str:
         payload = json.dumps({
-            "model": self.model,
+            "model": model or self.model,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
@@ -122,9 +127,10 @@ class OllamaClient(LLMClient):
         self.host = cfg.ollama_host.rstrip("/")
         self.model = cfg.ollama_model
 
-    def _call(self, system: str, user: str, max_tokens: int, effort: str) -> str:
+    def _call(self, system: str, user: str, max_tokens: int, effort: str,
+              model: str | None = None) -> str:
         payload = json.dumps({
-            "model": self.model,
+            "model": model or self.model,
             "system": system,
             "prompt": user,
             "stream": False,

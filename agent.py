@@ -91,12 +91,24 @@ class Agent:
         return None
 
     @staticmethod
-    def _score_peer(a: dict) -> float:
-        """동료 분석 선택 점수: 댓글 적을수록·심각도 높을수록 가산(최신성은 _pick_peer 정렬 1순위)."""
-        sev = {"critical": 3, "high": 2, "medium": 1}.get(
-            (a.get("severity") or "").lower(), 0)
+    def _peer_author(a: dict) -> str:
+        """동률·분산 판정용 작성자 키(페르소나 우선, 없으면 이름)."""
+        return (a.get("authorPersona") or a.get("authorName") or "").strip()
+
+    def _score_peer(self, a: dict, recency_rank: int) -> float:
+        """동료 분석 선택 점수. 어느 한 사람·한 글에 쏠리지 않도록 가중치를 합산한다.
+
+        - 심각도 높을수록 가산(critical 9 ~ medium 3)
+        - 최신일수록 가산하되 *상한이 있는* 완만한 가산(recency_rank 0=최신 → +5, 이후 1씩 감소)
+        - 댓글이 이미 많은 글은 감산(이미 토론이 붙은 글 말고 빈 글로 유도)
+        - 내가 이미 그 작성자에게 댓글을 많이 달았으면 크게 감산(작성자 다양성)
+        기존엔 createdAt 가 1순위라 '가장 최근 글 한 건'에만 쏠렸다 — 그 편향을 없앤다.
+        """
+        sev = {"critical": 9, "high": 6, "medium": 3}.get(
+            (a.get("severity") or "").lower(), 1)
         comments = a.get("commentCount") or 0
-        return sev * 10 - comments * 0.5
+        seen = self.state.commented_authors.get(self._peer_author(a), 0)
+        return sev + max(0, 5 - recency_rank) - comments * 1.0 - seen * 4.0
 
     def _pick_peer(self, community: list[dict]) -> dict | None:
         eligible = [
@@ -106,9 +118,11 @@ class Agent:
         ]
         if not eligible:
             return None
-        random.shuffle(eligible)  # 동률 랜덤 타이브레이크(여러 에이전트 쏠림 방지)
-        eligible.sort(key=lambda a: (a.get("createdAt") or "", self._score_peer(a)),
-                      reverse=True)
+        # 최신순 등수(0=가장 최신)를 점수 한 요소로만 쓴다(절대 1순위 아님).
+        order = sorted(eligible, key=lambda a: a.get("createdAt") or "", reverse=True)
+        recency = {id(a): i for i, a in enumerate(order)}
+        random.shuffle(eligible)  # 동점 랜덤 타이브레이크(쏠림 추가 방지)
+        eligible.sort(key=lambda a: self._score_peer(a, recency[id(a)]), reverse=True)
         return eligible[0]
 
     # ── 1) 분석할 CVE 한 건 선정 → 분석 → 게시 ────────────────
@@ -155,20 +169,57 @@ class Agent:
         cid = detail["cveId"]
         self.log(f"· 분석 중: {cid} ({detail.get('severity')}, CVSS {detail.get('cvssScore')})"
                  f"{' [외부보도]' if context else ''}")
-        mem_ctx = "\n".join(self.state.memory[-8:])  # 과거 내 분석 요지(중복 회피·연속성)
+        # 과거 내 분석을 단순 최신순이 아니라 *이 CVE 와 관련된 것* 을 앞세워 전달해,
+        # 새 분석이 기존 판단을 이어받아 더 깊어지도록(누적·고도화) 유도한다.
+        mem_ctx = self._build_memory_context(cid)
         body = self.brain.analyze_cve(detail, context=context, memory=mem_ctx)
         if len(body.strip()) < 20:
             self.log(f"  분석 본문이 너무 짧아 건너뜀: {cid}")
             return
         out = self.k.publish_analysis(cid, body)
         self.state.analyzed_cves.add(cid)
-        # 메모리 기록 — 다음 분석 때 참조해 중복 회피·입장 연속성
-        snippet = " ".join(ln.strip() for ln in body.splitlines()
-                           if ln.strip() and not ln.lstrip().startswith("#"))[:90]
-        self.state.memory.append(f"{cid}({detail.get('severity')}): {snippet}")
+        # 메모리 기록 — 핵심 요지(요약·위험도 결론)를 풍부하게 남겨 다음 분석이 이어받게 한다.
+        self.state.memory.append(f"{cid}({detail.get('severity')}): {self._key_points(body)}")
         self.state.memory = self.state.memory[-20:]
         self.state.save()  # 게시 직후 즉시 저장 — 갑작스런 종료에도 재분석 방지
         self.log(f"  ✅ 게시 완료 {cid} (analysisId={out.get('id')})")
+
+    # ── 분석 누적·고도화 헬퍼 ─────────────────────────────────
+    @staticmethod
+    def _key_points(body: str) -> str:
+        """분석 본문에서 핵심 요지를 추출(요약/위험도 결론 우선, 최대 ~240자).
+
+        다음 분석이 '제목 수준' 이 아니라 *직전 판단의 내용* 을 이어받아 발전시키도록,
+        90자 단순 절단 대신 의미 있는 결론 줄을 모은다."""
+        lines = [ln.strip() for ln in body.splitlines() if ln.strip()]
+        keep: list[str] = []
+        section = ""
+        for ln in lines:
+            if ln.lstrip().startswith("#"):
+                section = ln.lstrip("# ").strip()
+                continue
+            # 요약·위험도/우선순위 섹션의 본문 줄을 우선 수집(결론·판단이 담긴 곳)
+            if any(k in section for k in ("요약", "위험도", "우선순위")):
+                keep.append(ln.lstrip("-*• ").strip())
+            if sum(len(s) for s in keep) > 240:
+                break
+        if not keep:  # 섹션 매칭 실패 시 본문 앞부분으로 폴백
+            keep = [ln.lstrip("-*• ").strip() for ln in lines if not ln.startswith("#")][:2]
+        return " / ".join(keep)[:240]
+
+    def _build_memory_context(self, cid: str) -> str:
+        """이 CVE 와 관련된 과거 내 분석을 앞에, 최근 분석을 뒤에 둔 컨텍스트 문자열."""
+        related_ids: set[str] = set()
+        try:
+            related_ids = {r.get("cveId") for r in (self.k.related(cid) or []) if r.get("cveId")}
+        except KestrelError:
+            pass
+        related_mem = [m for m in self.state.memory
+                       if any(rid and rid in m for rid in related_ids)]
+        recent_mem = [m for m in self.state.memory if m not in related_mem][-6:]
+        # 관련 분석은 최대 4건까지 앞세우고, 그 뒤로 최근 분석을 붙인다.
+        return "\n".join(related_mem[-4:] + recent_mem)
+
 
     # ── 2) 동료 글에 댓글 ─────────────────────────────────────
     def do_comment(self, community: list[dict]) -> None:
@@ -181,6 +232,10 @@ class Agent:
         # 최상위 댓글 — analysisId 필수(이 분석 스레드에 붙도록)
         self.k.post_comment(peer["cveId"], text, analysis_id=peer.get("id"))
         self.state.commented_analyses.add(str(peer.get("id")))
+        author = self._peer_author(peer)
+        if author:
+            self.state.commented_authors[author] = \
+                self.state.commented_authors.get(author, 0) + 1
         self.state.save()
         self.log(f"  💬 댓글: {peer['cveId']} (← {peer.get('authorName')})")
 

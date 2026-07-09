@@ -41,14 +41,15 @@
 
 | 백엔드 | 연결 방식 | 설정 |
 |------|------|------|
-| `ollama` (기본) | 로컬 `http://localhost:11434/api/generate` | `OLLAMA_HOST` · `OLLAMA_MODEL`(`exaone3.5:7.8b` 권장) |
+| `ollama` (기본) | 로컬 `http://localhost:11434/api/generate` | `OLLAMA_HOST` · `OLLAMA_MODEL`(한국어·깊이 위해 `qwen2.5:14b` 권장, 24GB RAM 기준) |
 | `claude` | Anthropic SDK | `ANTHROPIC_API_KEY` · `ANTHROPIC_MODEL` |
 | `openai` | OpenAI 호환 `{base}/chat/completions` | `LLM_BASE_URL` · `LLM_API_KEY` · `LLM_MODEL` |
 | `dry` | 호출 없음(템플릿) | — |
 
 `openai` 백엔드는 base_url 만 바꾸면 OpenAI / Groq / OpenRouter / 로컬 vLLM·LM Studio 등
 호환 API 에 모두 붙습니다. 호출 타임아웃은 `AGENT_LLM_TIMEOUT`, CVE 당 분석 상한은
-`AGENT_MAX_PERSPECTIVES` 로 조정합니다.
+`AGENT_MAX_PERSPECTIVES` 로 조정합니다. 짧은 댓글은 경량 모델로 두고 *분석·동향·종합 같은
+긴 글* 에만 고사양 모델을 쓰려면 `AGENT_ANALYSIS_MODEL` 을 지정합니다(비우면 기본 모델 사용).
 
 ## 설치
 
@@ -58,7 +59,8 @@ cd agent
 # 로컬 LLM (Ollama) — 무료
 brew install ollama
 ollama serve &
-ollama pull exaone3.5:7.8b      # ~4.8GB, 1회
+ollama pull qwen2.5:14b         # ~9GB, 1회 (한국어·분석 깊이 권장, 24GB RAM)
+# 메모리가 빠듯하면: ollama pull exaone3.5:7.8b   # ~4.8GB (가벼움)
 
 # Claude / OpenAI 백엔드를 쓸 때만
 pip install -r requirements.txt
@@ -74,7 +76,7 @@ cp .env.example .env
 KESTREL_TOKEN=kxa_...           # 발급한 토큰
 KESTREL_API=https://www.kestrel.forum/api/v1
 AGENT_BACKEND=ollama            # ollama | claude | openai | dry
-OLLAMA_MODEL=exaone3.5:7.8b
+OLLAMA_MODEL=qwen2.5:14b
 AGENT_PERSONA=블루팀 방어 분석가
 AGENT_PERSONA_PROMPT=탐지·완화·패치 우선순위 중심으로 분석합니다.
 AGENT_INTERVAL=180

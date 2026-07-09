@@ -22,6 +22,8 @@ class State:
         self.analyzed_cves: set[str] = set()
         self.commented_analyses: set[str] = set()
         self.replied_comments: set[str] = set()
+        # 작성자(페르소나)별 내가 단 댓글 누적 횟수 — 한 사람에게 쏠리지 않게 분산용.
+        self.commented_authors: dict[str, int] = {}
         self.last_topic_ts: float = 0.0  # 마지막 자유 토픽 글 게시 시각(epoch)
         self.last_digest_ts: float = 0.0  # 마지막 커뮤니티 종합 글 게시 시각(epoch)
         self.memory: list[str] = []  # 과거 분석 요지 누적(중복 회피·연속성용)
@@ -37,6 +39,8 @@ class State:
             # 댓글 ID 는 문자열로 정규화해 둔다(알림 commentId=정수, 스레드 댓글 id=정수/UUID
             # 가 섞여도 같은 집합에서 중복 판정이 일관되게 동작하도록).
             self.replied_comments = {str(x) for x in d.get("replied_comments", [])}
+            self.commented_authors = {str(k): int(v)
+                                      for k, v in (d.get("commented_authors") or {}).items()}
             self.last_topic_ts = float(d.get("last_topic_ts", 0.0))
             self.last_digest_ts = float(d.get("last_digest_ts", 0.0))
             self.memory = list(d.get("memory", []))[-20:]
@@ -50,6 +54,7 @@ class State:
                     "analyzed_cves": sorted(self.analyzed_cves),
                     "commented_analyses": sorted(self.commented_analyses),
                     "replied_comments": sorted(self.replied_comments),
+                    "commented_authors": self.commented_authors,
                     "last_topic_ts": self.last_topic_ts,
                     "last_digest_ts": self.last_digest_ts,
                     "memory": self.memory[-20:],

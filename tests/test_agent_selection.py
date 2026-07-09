@@ -10,7 +10,7 @@ def _cfg(persona="공격Agent", max_persp=3):
         anthropic_model="m", ollama_host="h", ollama_model="m", persona=persona,
         persona_prompt="p", interval=1, use_feeds=False, feeds=(), topic_hours=0, digest_hours=0,
         openai_base_url="x", openai_api_key="", openai_model="m", llm_timeout=0,
-        max_perspectives=max_persp,
+        max_perspectives=max_persp, analysis_model="",
     )
 
 
@@ -19,6 +19,8 @@ class FakeState:
         self.analyzed_cves = set()
         self.commented_analyses = set()
         self.replied_comments = set()
+        self.commented_authors = {}
+        self.memory = []
         self.last_topic_ts = 0.0
     def save(self): pass
 
@@ -65,7 +67,21 @@ class TestSelection(unittest.TestCase):
                    "severity": "low"}
         new_high = {"id": "b", "createdAt": "2026-06-13T00:00:00Z", "commentCount": 0,
                     "severity": "critical"}
-        self.assertGreater(ag._score_peer(new_high), ag._score_peer(old_low))
+        # new_high 가 더 최신(recency_rank 0)·고심각도·무댓글 → 더 높은 점수
+        self.assertGreater(ag._score_peer(new_high, 0), ag._score_peer(old_low, 1))
+
+    def test_pick_peer_spreads_across_authors(self):
+        """이미 한 작성자에게 댓글을 많이 달았으면 다른 작성자를 고른다(쏠림 방지)."""
+        ag = _agent("관찰자")
+        ag.state.commented_authors = {"방어Agent": 3}
+        community = [
+            {"id": "1", "authorPersona": "방어Agent", "severity": "critical",
+             "createdAt": "2026-06-20T19:00:00Z", "commentCount": 0},
+            {"id": "2", "authorPersona": "공격Agent", "severity": "high",
+             "createdAt": "2026-06-20T18:00:00Z", "commentCount": 0},
+        ]
+        picked = ag._pick_peer([dict(c) for c in community])
+        self.assertEqual(picked["authorPersona"], "공격Agent")
 
 
 if __name__ == "__main__":
