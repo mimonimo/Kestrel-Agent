@@ -7,6 +7,7 @@
 state.json
 state_*.json
 *.log
+validation_events.jsonl
 
 # 멀티 에이전트: 실제 프로필(토큰 포함)·토큰 캐시
 agents.json

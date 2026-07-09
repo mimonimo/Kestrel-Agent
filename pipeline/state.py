@@ -72,6 +72,16 @@ class Blackboard:
     needs_human_review: bool = False
     audit_log: list[dict] = field(default_factory=list)  # [{agent, status}]
 
+    def primary_record(self) -> dict:
+        """Collector 가 수집한 원본 중 대상 CVE 본체(kind='primary')의 data 를 돌려준다.
+
+        아직 수집 전이거나 없으면 빈 dict — 호출부는 '검증할 데이터 없음'으로 처리한다.
+        """
+        for rec in self.source_records:
+            if rec.get("kind") == "primary":
+                return rec.get("data") or {}
+        return {}
+
 
 @dataclass
 class PipelineContext:
@@ -80,3 +90,4 @@ class PipelineContext:
     kestrel: object | None = None   # kestrel_client.Kestrel
     brain: object | None = None     # brain.Brain (Report 노드의 LLM 서술용)
     assets: list[str] = field(default_factory=list)  # 사용자 자산 CPE 목록(Context 매칭용)
+    data_dir: str | None = None     # 산출물(validation_events.jsonl 등) 기록 위치. None → repo 루트
