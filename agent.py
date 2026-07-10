@@ -328,6 +328,12 @@ class Agent:
         parts.append(r.attack or "추정: 제공된 정보로는 상세 공격 기법을 확정하기 어렵습니다.")
         if ex.narrative:
             parts.append(f"\n**악용 가능성**: {ex.narrative}")
+        if r.impact:
+            parts.append("\n## 💥 영향 분석")
+            parts.append(r.impact)
+        if r.chaining:
+            parts.append("\n## 🔗 관련 취약점·체이닝")
+            parts.append(r.chaining)
         if r.detection:
             parts.append("\n## 🔎 탐지")
             parts.append(r.detection)

@@ -19,7 +19,8 @@ import time
 from pipeline.agents.base import register
 from pipeline.personas import resolve_persona
 
-_MAX_TOKENS = 2000  # 파이프라인 근거 인용 + 3섹션(공격·탐지·완화)이 완결되도록. 장황 금지는 프롬프트로 통제.
+_MAX_TOKENS = 2600  # 파이프라인 근거 인용 + 5섹션(공격·영향·체이닝·탐지·완화)이 완결되도록.
+                    # "길이"가 아니라 "구조적 깊이" — 각 섹션 간결하게(장황·중복 금지는 프롬프트로 통제).
 _BASE_SYSTEM = (
     "공개된 CVE 에 대한 합법적 보안 연구입니다. 결과는 방어·교육 목적으로 보안 커뮤니티에 "
     "공유됩니다. 한국어 존댓말로 쓰되 보안 용어·식별자·코드·정규식은 영문 그대로 두세요. "
@@ -96,33 +97,60 @@ def _prompt(bb, persona, report_lang: str) -> tuple[str, str]:  # noqa: ANN001
         "최고 수준임을 뜻함'). 왜 이 수치가 우선순위에 중요한지 설명.\n"
         "  · 우선순위: 결정 논리를 풀어 쓰세요(예: 'KEV 등재로 즉시 대응으로 상향'). 규칙 기반이라 "
         "설명 가능하다는 점이 차별점입니다.\n\n"
-        "각 섹션은 구체적이되 간결하게(핵심을 불릿으로, 장황·중복 금지). 확정할 수 없는 값은 "
-        "지어내지 말고 '추정:' 을 붙이세요. 정확히 아래 헤더·형식으로만 출력하세요"
-        "(다른 머리말·코드펜스 금지):\n\n"
+        "각 섹션은 구체적이되 간결하게(핵심을 불릿으로, 장황·중복 금지 — 길이가 아니라 깊이). "
+        "확정할 수 없는 값은 지어내지 말고 '추정:' 을 붙이세요. 정확히 아래 헤더·형식으로만 "
+        "출력하세요(다른 머리말·코드펜스 금지):\n\n"
         "SUMMARY_EN: <취약점과 최우선 조치를 요약한 영어 한 문장>\n\n"
         "## 공격 기법\n"
         f"<{body_lang}. (1) 트리거 조건 — 어떤 입력/요청이 어떤 결함을 건드리는지, "
-        "(2) 공격 단계를 순서대로(정찰→트리거→실행·권한 획득→후속 피벗), 각 단계의 전제조건, "
-        "(3) 공격 표면 — 노출되는 엔드포인트·파라미터·프로토콜, "
+        "(2) 공격 단계를 순서대로(정찰→초기접근→실행·권한 획득→지속→영향), 각 단계의 전제조건과 "
+        "관측 가능한 지표, (3) 공격 표면 — 노출되는 엔드포인트·파라미터·프로토콜, "
         "(4) CVSS 벡터(AV/AC/PR/UI)를 실제 공격 조건에 연결. "
-        "원리와 축약된 개념 예시까지만, 복사-실행 가능한 완전한 코드는 금지>\n\n"
+        "원리와 축약된 개념 예시까지만, 복사-실행 가능한 완전한 코드·무기화된 전체 페이로드는 금지>\n\n"
+        "## 영향 분석\n"
+        f"<{body_lang}. 악용에 성공했을 때의 결과만. (1) 기술적 위험 — 이 CVE 에 실제로 해당하는 "
+        "것만(데이터 유출·시스템 장악·서비스 중단·횡적 이동 등), (2) 비즈니스 영향 — 서비스 "
+        "가용성·규제/컴플라이언스·신뢰 관점. 영향 제품·노출 규모를 근거로 삼되 과장 금지, "
+        "해당 없는 위험은 적지 마세요>\n\n"
+        "## 관련 취약점·체이닝\n"
+        f"<{body_lang}. 이 결함이 다른 결함과 어떻게 이어질 수 있는지를 '유형·패턴' 수준으로만 "
+        "(예: 정보 노출 → 권한 상승 → RCE 로 이어지는 체인). "
+        "★실제 CVE 번호는 확실하지 않으면 절대 쓰지 마세요(지어내면 안 됩니다). 확실한 근거가 "
+        "없으면 취약점 '유형'(CWE 계열)과 일반적 체이닝 패턴만 서술하고 '추정:' 을 붙이세요>\n\n"
         "## 탐지\n"
         f"<{body_lang}. (1) 로그 지표 — 어떤 로그의 어떤 필드에 어떤 패턴이 남는지, "
-        "(2) 탐지 규칙 예시 — 정규식과, 가능하면 SIEM 쿼리 형태 또는 탐지 로직 의사코드로 "
-        "1~3개, (3) 오탐 가능성과 이를 줄이는 법>\n\n"
+        "(2) 탐지 규칙 1~3개 — 소스/필드/조건/임계값을 갖춘 SIEM 쿼리 형태 또는 탐지 로직 "
+        "의사코드(정규식 포함), (3) 오탐 시나리오와 이를 줄이는 튜닝 방법>\n\n"
         "## 완화 방안\n"
         f"<{body_lang}. 계층별로 나눠 쓰세요. "
         "**즉시(긴급 차단)**: 지금 당장 할 임시 조치(설정 변경·ACL·기능 비활성화). "
         "**단기(완화)**: 패치 전까지 위험을 낮추는 조치. "
         "**근본(해결)**: 패치·수정 버전 명시와 업그레이드 절차. "
-        "각 조치의 운영 트레이드오프(가용성·성능·마찰)를 한 마디씩 덧붙이세요>\n"
+        "각 조치마다 구현 난이도·운영 영향(가용성·성능·마찰)·검증 방법을 한 마디씩 덧붙이세요>\n"
     )
     return system, user
 
 
-def _parse(text: str) -> tuple[str, str, str, str]:
-    """LLM 출력 → (summary_en, attack, detection, mitigation). 헤더 관대 매칭."""
-    summary_en, attack, det, mit = "", [], [], []
+def _section_of(head: str) -> str | None:
+    """헤더 텍스트(소문자) → 섹션 키. 순서 중요(체이닝을 완화보다 먼저)."""
+    if "공격" in head or "attack" in head:
+        return "attack"
+    if "영향" in head or "impact" in head:
+        return "impact"
+    if "체이닝" in head or "chain" in head or "연계" in head or "관련" in head:
+        return "chaining"
+    if "탐지" in head or "detect" in head:
+        return "detection"
+    if "완화" in head or "방어" in head or "mitig" in head:
+        return "mitigation"
+    return None
+
+
+def _parse(text: str) -> dict[str, str]:
+    """LLM 출력 → {summary_en, attack, impact, chaining, detection, mitigation}. 헤더 관대 매칭."""
+    buckets: dict[str, list[str]] = {
+        "attack": [], "impact": [], "chaining": [], "detection": [], "mitigation": []}
+    summary_en = ""
     section = None
     for line in (text or "").splitlines():
         s = line.strip()
@@ -132,26 +160,15 @@ def _parse(text: str) -> tuple[str, str, str, str]:
             section = "sum"
             continue
         if s.startswith("#"):
-            head = s.lstrip("# ").strip().lower()
-            if "공격" in head or "attack" in head:
-                section = "attack"
-            elif "탐지" in head or "detect" in head:
-                section = "det"
-            elif "완화" in head or "방어" in head or "mitig" in head:
-                section = "mit"
-            else:
-                section = None
+            section = _section_of(s.lstrip("# ").strip().lower())
             continue
-        if section == "attack":
-            attack.append(line)
-        elif section == "det":
-            det.append(line)
-        elif section == "mit":
-            mit.append(line)
+        if section in buckets:
+            buckets[section].append(line)
         elif section == "sum" and not summary_en and s:
             summary_en = s  # 요약이 다음 줄로 넘어간 경우
-    return (summary_en.strip(), "\n".join(attack).strip(),
-            "\n".join(det).strip(), "\n".join(mit).strip())
+    out = {k: "\n".join(v).strip() for k, v in buckets.items()}
+    out["summary_en"] = summary_en.strip()
+    return out
 
 
 def _model_name(client) -> str:
@@ -179,32 +196,35 @@ def report(bb, ctx) -> None:  # noqa: ANN001
         bb.needs_retry = True
         return
 
-    summary_en, attack, detection, mit = _parse(raw)
-    if not attack and not detection and not mit:
-        # 형식 붕괴 시 1회 더 강하게 요청
+    p = _parse(raw)
+    core_empty = not (p["attack"] or p["detection"] or p["mitigation"])
+    if core_empty:
+        # 형식 붕괴 시 1회 더 강하게 요청(핵심 3섹션 헤더를 명시)
         strict = user + "\n\n[재요청] 반드시 'SUMMARY_EN:' 줄과 '## 공격 기법', '## 탐지', " \
-                        "'## 완화 방안' 세 헤더를 그대로 쓰세요."
+                        "'## 완화 방안' 헤더를 그대로 쓰세요."
         try:
             raw2 = client.complete(system, strict, max_tokens=_MAX_TOKENS, effort="medium",
                                    model=model)
-            s2, a2, d2, m2 = _parse(raw2)
-            summary_en = summary_en or s2
-            attack, detection, mit = a2, d2, m2
-            raw = raw2
+            p2 = _parse(raw2)
+            p2["summary_en"] = p["summary_en"] or p2["summary_en"]
+            p, raw = p2, raw2
+            core_empty = not (p["attack"] or p["detection"] or p["mitigation"])
         except Exception:  # noqa: BLE001 — 재시도 실패는 아래 폴백으로
             pass
-    if not attack and not detection and not mit:
-        attack = (raw or "").strip()  # 최후 폴백: 원문을 공격 서술에 담고 표식
+    if core_empty:
+        p["attack"] = (raw or "").strip()  # 최후 폴백: 원문을 공격 서술에 담고 표식
 
-    bb.report.summary_en = summary_en
-    bb.report.detection = detection
-    bb.report.attack = attack
-    bb.report.mitigation = mit
+    bb.report.summary_en = p["summary_en"]
+    bb.report.attack = p["attack"]
+    bb.report.impact = p["impact"]
+    bb.report.chaining = p["chaining"]
+    bb.report.detection = p["detection"]
+    bb.report.mitigation = p["mitigation"]
     bb.report.lang = ("en" if str(report_lang).startswith("en") else "ko") + \
-                     ("+en" if summary_en else "")
+                     ("+en" if p["summary_en"] else "")
     bb.report.meta = {
         "model": used_model,
         "persona": persona.key,
         "elapsed_sec": round(time.time() - started, 2),
-        "unparsed": not mit and not summary_en,
+        "unparsed": not p["mitigation"] and not p["summary_en"],
     }

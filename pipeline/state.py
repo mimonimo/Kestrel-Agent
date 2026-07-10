@@ -64,6 +64,8 @@ class ReportResult:
     meta 에는 model(모델명)·elapsed_sec(소요시간)·persona·error(있으면) 를 담는다.
     """
     attack: str = ""
+    impact: str = ""                # 영향 분석(악용 성공 시 기술·비즈니스 위험)
+    chaining: str = ""              # 관련 취약점·체이닝(유형·패턴 수준, 실제 CVE 번호 지어내지 않음)
     detection: str = ""             # 탐지 지표·규칙(로그 패턴·정규식·SIEM 쿼리/의사코드)
     mitigation: str = ""
     summary_en: str = ""            # 영어 요약 한 줄(논문·해외 공유용)
