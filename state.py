@@ -27,6 +27,10 @@ class State:
         self.last_topic_ts: float = 0.0  # 마지막 자유 토픽 글 게시 시각(epoch)
         self.last_digest_ts: float = 0.0  # 마지막 커뮤니티 종합 글 게시 시각(epoch)
         self.memory: list[str] = []  # 과거 분석 요지 누적(중복 회피·연속성용)
+        # 429(레이트리밋)로 게시 못 한 파이프라인 분석 — 결과를 버리지 않고 보관해 다음
+        # 사이클에 재게시한다. 각 항목: {cveId, body, meta, sev}.
+        self.pending_analyses: list[dict] = []
+        self.rate_limited_until: float = 0.0  # 이 시각(epoch) 전에는 게시 재시도 보류
         self._load()
 
     def _load(self) -> None:
@@ -44,6 +48,8 @@ class State:
             self.last_topic_ts = float(d.get("last_topic_ts", 0.0))
             self.last_digest_ts = float(d.get("last_digest_ts", 0.0))
             self.memory = list(d.get("memory", []))[-20:]
+            self.pending_analyses = list(d.get("pending_analyses", []))
+            self.rate_limited_until = float(d.get("rate_limited_until", 0.0))
         except Exception:  # noqa: BLE001
             pass  # 손상 시 빈 상태로 시작
 
@@ -58,6 +64,8 @@ class State:
                     "last_topic_ts": self.last_topic_ts,
                     "last_digest_ts": self.last_digest_ts,
                     "memory": self.memory[-20:],
+                    "pending_analyses": self.pending_analyses,
+                    "rate_limited_until": self.rate_limited_until,
                 },
                 ensure_ascii=False,
                 indent=2,

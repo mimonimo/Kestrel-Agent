@@ -37,6 +37,9 @@ from state import State
 # 한 사이클에 댓글 스레드를 훑어볼 CVE 개수 상한(쓰기 레이트리밋·생성 비용 보호).
 _THREAD_SCAN = 4
 
+# 429 로 밀린 분석을 보관하는 로컬 큐의 상한(무한 적체 방지).
+_MAX_PENDING = 50
+
 # 파이프라인産 분석의 게시 메타에 실리는 버전 표식 — 플랫폼/논문에서 어느 파이프라인이
 # 생성했는지 추적한다. 파이프라인 산출 스키마가 바뀌면 올린다.
 PIPELINE_VERSION = "kestrel-agent-pipeline-v1"
@@ -157,6 +160,9 @@ class Agent:
 
     def do_analysis(self, community: list[dict]) -> None:
         counts = self._analysis_counts(community)
+        if time.time() < self.state.rate_limited_until:
+            self.log("· 레이트리밋 대기 중 — 새 분석 생성 생략(큐 재게시 우선).")
+            return
         detail, context, src = self._pick_from_feeds(counts)
         if detail is not None:
             self.log(f"· 외부 보도 기반 선정: {detail.get('cveId')} (출처 {src})")
@@ -180,13 +186,62 @@ class Agent:
         if len(body.strip()) < 20:
             self.log(f"  분석 본문이 너무 짧아 건너뜀: {cid}")
             return
-        out = self.k.publish_analysis(cid, body, **meta)
+        self._publish_analysis(cid, body, meta, detail.get("severity"))
+
+    # ── 게시(429 안전장치: 결과 큐 보관 + Retry-After 존중 재시도) ──────
+    def _publish_analysis(self, cid: str, body: str, meta: dict, sev: str | None) -> bool:
+        """분석을 게시. 성공 시 상태 갱신 후 True. 429 면 결과를 큐에 보관하고 False
+        (파이프라인 생성 결과를 버리지 않음 — 다음 사이클 _flush_pending 이 재게시)."""
+        try:
+            out = self.k.publish_analysis(cid, body, **meta)
+        except RateLimited as e:
+            self._enqueue_pending(cid, body, meta, sev)
+            self.state.rate_limited_until = time.time() + e.retry_after
+            self.state.save()
+            self.log(f"  ⏳ 429 — 게시 보류(큐 {len(self.state.pending_analyses)}건), "
+                     f"{e.retry_after}s 후 재시도")
+            return False
+        self._record_published(cid, body, sev, out)
+        return True
+
+    def _enqueue_pending(self, cid: str, body: str, meta: dict, sev: str | None) -> None:
+        q = self.state.pending_analyses
+        if any(it.get("cveId") == cid for it in q):
+            return  # 같은 CVE 중복 큐잉 방지
+        q.append({"cveId": cid, "body": body, "meta": meta, "sev": sev})
+        if len(q) > _MAX_PENDING:  # 무한 적체 방지 — 가장 오래된 것부터 폐기
+            dropped = q.pop(0)
+            self.log(f"  ⚠️ 큐 상한({_MAX_PENDING}) 초과 — 폐기: {dropped.get('cveId')}")
+
+    def _record_published(self, cid: str, body: str, sev: str | None, out: dict) -> None:
         self.state.analyzed_cves.add(cid)
-        # 메모리 기록 — 핵심 요지(요약·위험도 결론)를 풍부하게 남겨 다음 분석이 이어받게 한다.
-        self.state.memory.append(f"{cid}({detail.get('severity')}): {self._key_points(body)}")
+        # 핵심 요지를 메모리에 남겨 다음 분석이 이어받게 한다.
+        self.state.memory.append(f"{cid}({sev or '?'}): {self._key_points(body)}")
         self.state.memory = self.state.memory[-20:]
         self.state.save()  # 게시 직후 즉시 저장 — 갑작스런 종료에도 재분석 방지
         self.log(f"  ✅ 게시 완료 {cid} (analysisId={out.get('id')})")
+
+    def _flush_pending(self) -> None:
+        """큐에 보관된(429로 밀린) 분석을 FIFO 로 재게시한다. Retry-After 전이면 보류하고,
+        첫 실패에서 멈춰 순서를 유지한다(다음 사이클 재시도 — 결과 낭비·순서 뒤섞임 방지)."""
+        q = self.state.pending_analyses
+        if not q or time.time() < self.state.rate_limited_until:
+            return
+        while q:
+            item = q[0]
+            try:
+                out = self.k.publish_analysis(item["cveId"], item["body"], **item.get("meta", {}))
+            except RateLimited as e:
+                self.state.rate_limited_until = time.time() + e.retry_after
+                self.log(f"  ⏳ 큐 재시도 중 429 — {len(q)}건 보류, {e.retry_after}s 후")
+                break
+            except KestrelError as e:
+                self.log(f"  [오류] 큐 재게시 실패({e.status}) {item['cveId']} — 유지")
+                break  # 일시 오류: 순서 유지, 다음 사이클 재시도
+            else:
+                q.pop(0)
+                self._record_published(item["cveId"], item["body"], item.get("sev"), out)
+        self.state.save()
 
     # ── 분석 본문 생성: 기본은 brain, USE_PIPELINE=True 면 계층 2 파이프라인(4b) ──
     def _make_analysis_body(self, detail: dict, context: str,
@@ -457,12 +512,14 @@ class Agent:
     def cycle(self) -> None:
         community = self.k.community_analyses(limit=15)
         try:
+            self._flush_pending()  # 지난 사이클 429 로 밀린 분석 먼저 재게시
             self.do_analysis(community)
-            self.do_comment(community)
-            self.do_replies()
-            self.do_thread_discussion(community)
-            self.do_topic_post()
-            self.do_community_digest(community)
+            if not getattr(self.cfg, "analysis_only", False):
+                self.do_comment(community)
+                self.do_replies()
+                self.do_thread_discussion(community)
+                self.do_topic_post()
+                self.do_community_digest(community)
         except RateLimited as e:
             self.log(f"· 레이트리밋(429) — 다음 사이클까지 쓰기 대기: {e.detail}")
         finally:

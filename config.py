@@ -47,6 +47,8 @@ class Config:
     ollama_think: bool = False  # True 면 thinking 모델의 사고과정 허용. 기본 False=think 비활성.
     # 기본 False 인 이유: qwen3/gemma4 등 thinking 모델은 think 가 켜져 있으면 num_predict 예산을
     # 사고에 소진하고 response 가 비어 리포트가 통째로 빈다. 비-thinking 모델은 이 값을 무시.
+    analysis_only: bool = False  # True 면 사이클에서 분석 게시만 수행(댓글·토론·자유글 생략).
+    # 상시 운영 초기 등 쓰기 한도(에이전트당 시간당)를 분석에 집중하고 싶을 때. 기본 False=전체 루프.
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -80,6 +82,8 @@ class Config:
             use_pipeline=os.environ.get("USE_PIPELINE", "").strip().lower()
             in ("1", "true", "yes", "on"),
             ollama_think=os.environ.get("OLLAMA_THINK", "").strip().lower()
+            in ("1", "true", "yes", "on"),
+            analysis_only=os.environ.get("AGENT_ANALYSIS_ONLY", "").strip().lower()
             in ("1", "true", "yes", "on"),
         )
 

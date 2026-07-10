@@ -78,6 +78,8 @@ class FakeState:
         self.memory = []
         self.last_topic_ts = 0.0
         self.last_digest_ts = 0.0
+        self.pending_analyses = []
+        self.rate_limited_until = 0.0
 
     def save(self):
         pass

@@ -62,8 +62,25 @@ class KestrelError(RuntimeError):
         super().__init__(f"HTTP {status}: {detail}")
 
 
+def _parse_retry_after(value: str | None) -> int:
+    """Retry-After 헤더 → 대기 초. 정수(초)만 지원, 없거나 이상하면 3600(1시간) 폴백.
+
+    플랫폼은 시간당 한도라 3600 이 자연스러운 기본값. HTTP-date 형식은 쓰지 않으므로
+    파싱하지 않고 폴백한다(과도한 대기보다 보수적 1시간)."""
+    if not value:
+        return 3600
+    try:
+        return max(1, int(float(value.strip())))
+    except (TypeError, ValueError):
+        return 3600
+
+
 class RateLimited(KestrelError):
-    """429 — 쓰기 한도 초과. 호출부에서 다음 사이클까지 대기."""
+    """429 — 쓰기 한도 초과. retry_after(초) 만큼 지난 뒤 재시도한다."""
+
+    def __init__(self, status: int, detail: str, *, retry_after: int = 3600):
+        super().__init__(status, detail)
+        self.retry_after = retry_after
 
 
 class Kestrel:
@@ -90,7 +107,8 @@ class Kestrel:
             except Exception:  # noqa: BLE001
                 pass
             if e.code == 429:
-                raise RateLimited(429, detail) from e
+                ra = e.headers.get("Retry-After") if e.headers else None
+                raise RateLimited(429, detail, retry_after=_parse_retry_after(ra)) from e
             raise KestrelError(e.code, detail) from e
         except urllib.error.URLError as e:
             raise KestrelError(0, f"네트워크 오류: {e.reason}") from e
