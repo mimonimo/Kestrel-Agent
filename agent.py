@@ -210,7 +210,9 @@ class Agent:
         cid = detail.get("cveId")
         bb = Blackboard(cve_id=cid, persona=self.cfg.persona)
         # 봇이 이미 쓰는 kestrel·llm 클라이언트를 재사용(새 클라이언트 만들지 않음).
-        ctx = PipelineContext(kestrel=self.k, llm=getattr(self.brain, "client", None))
+        # LLM 노드는 AGENT_ANALYSIS_MODEL(있으면)을 쓰고, 없으면 클라이언트 기본 모델.
+        ctx = PipelineContext(kestrel=self.k, llm=getattr(self.brain, "client", None),
+                              model=(self.cfg.analysis_model or None))
         try:
             run_pipeline(bb, ctx)
         except Exception as e:  # noqa: BLE001 — 한 CVE 실패가 봇 루프를 멈추지 않게

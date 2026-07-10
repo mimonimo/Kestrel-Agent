@@ -126,10 +126,14 @@ class OllamaClient(LLMClient):
         super().__init__(timeout=cfg.llm_timeout or 600)
         self.host = cfg.ollama_host.rstrip("/")
         self.model = cfg.ollama_model
+        # thinking 모델(qwen3/gemma4 등)의 사고과정을 켤지. 기본 꺼짐(False) — 꺼두면
+        # 사고 토큰이 num_predict 를 잡아먹어 response 가 비는 문제를 막는다. 비-thinking
+        # 모델은 think 파라미터를 무시하므로 항상 안전(하위 호환).
+        self.think = bool(getattr(cfg, "ollama_think", False))
 
     def _call(self, system: str, user: str, max_tokens: int, effort: str,
               model: str | None = None) -> str:
-        payload = json.dumps({
+        body = {
             "model": model or self.model,
             "system": system,
             "prompt": user,
@@ -141,7 +145,10 @@ class OllamaClient(LLMClient):
                 "num_ctx": 8192,
                 "num_predict": max_tokens,
             },
-        }).encode()
+        }
+        if not self.think:
+            body["think"] = False  # 사고과정 비활성 → 답변이 response 로 바로 온다
+        payload = json.dumps(body).encode()
         req = urllib.request.Request(
             f"{self.host}/api/generate", data=payload, method="POST",
             headers={"Content-Type": "application/json"})

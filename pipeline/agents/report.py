@@ -114,13 +114,15 @@ def report(bb, ctx) -> None:  # noqa: ANN001
 
     persona = resolve_persona(bb.persona)
     report_lang = getattr(ctx, "report_lang", "ko") or "ko"
+    model = getattr(ctx, "model", None) or None  # 지정 분석 모델(없으면 클라이언트 기본)
+    used_model = model or _model_name(client)
     system, user = _prompt(bb, persona, report_lang)
 
     started = time.time()
     try:
-        raw = client.complete(system, user, max_tokens=_MAX_TOKENS, effort="medium")
+        raw = client.complete(system, user, max_tokens=_MAX_TOKENS, effort="medium", model=model)
     except Exception as e:  # noqa: BLE001 — llm.LLMError 포함. 로컬 실패는 재시도 대상.
-        bb.report.meta = {"model": _model_name(client), "persona": persona.key,
+        bb.report.meta = {"model": used_model, "persona": persona.key,
                           "elapsed_sec": round(time.time() - started, 2), "error": str(e)}
         bb.needs_retry = True
         return
@@ -131,7 +133,8 @@ def report(bb, ctx) -> None:  # noqa: ANN001
         strict = user + "\n\n[재요청] 반드시 'SUMMARY_EN:' 줄과 '## 공격 기법', '## 완화 방안' " \
                         "두 헤더를 그대로 쓰세요."
         try:
-            raw2 = client.complete(system, strict, max_tokens=_MAX_TOKENS, effort="medium")
+            raw2 = client.complete(system, strict, max_tokens=_MAX_TOKENS, effort="medium",
+                                   model=model)
             s2, a2, m2 = _parse(raw2)
             summary_en = summary_en or s2
             attack, mit = a2, m2
@@ -147,7 +150,7 @@ def report(bb, ctx) -> None:  # noqa: ANN001
     bb.report.lang = ("en" if str(report_lang).startswith("en") else "ko") + \
                      ("+en" if summary_en else "")
     bb.report.meta = {
-        "model": _model_name(client),
+        "model": used_model,
         "persona": persona.key,
         "elapsed_sec": round(time.time() - started, 2),
         "unparsed": not mit and not summary_en,

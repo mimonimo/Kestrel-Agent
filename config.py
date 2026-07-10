@@ -44,6 +44,9 @@ class Config:
     max_perspectives: int  # CVE 당 분석 개수 상한
     analysis_model: str    # 분석(무거운 작업) 전용 모델. 비우면 백엔드 기본 모델 사용.
     use_pipeline: bool = False  # True 면 분석 게시를 계층 2 파이프라인으로. 기본 False=기존 brain 경로
+    ollama_think: bool = False  # True 면 thinking 모델의 사고과정 허용. 기본 False=think 비활성.
+    # 기본 False 인 이유: qwen3/gemma4 등 thinking 모델은 think 가 켜져 있으면 num_predict 예산을
+    # 사고에 소진하고 response 가 비어 리포트가 통째로 빈다. 비-thinking 모델은 이 값을 무시.
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -75,6 +78,8 @@ class Config:
             max_perspectives=int(os.environ.get("AGENT_MAX_PERSPECTIVES", "3")),
             analysis_model=os.environ.get("AGENT_ANALYSIS_MODEL", "").strip(),
             use_pipeline=os.environ.get("USE_PIPELINE", "").strip().lower()
+            in ("1", "true", "yes", "on"),
+            ollama_think=os.environ.get("OLLAMA_THINK", "").strip().lower()
             in ("1", "true", "yes", "on"),
         )
 

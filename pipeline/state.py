@@ -113,3 +113,4 @@ class PipelineContext:
     data_dir: str | None = None     # 산출물(validation_events.jsonl 등) 기록 위치. None → repo 루트
     report_lang: str = "ko"         # Report 본문 언어(ko|en). 항상 영어 요약 한 줄은 함께 낸다
     epss_fetch: object | None = None  # callable(cveId)->{'epss','percentile'}|None. None→FIRST.org 기본 조회
+    model: str | None = None        # LLM 노드(Report·Exploitability)가 쓸 모델명. None→클라이언트 기본 모델
