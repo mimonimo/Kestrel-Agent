@@ -273,6 +273,9 @@ class Agent:
         parts.append(r.attack or "추정: 제공된 정보로는 상세 공격 기법을 확정하기 어렵습니다.")
         if ex.narrative:
             parts.append(f"\n**악용 가능성**: {ex.narrative}")
+        if r.detection:
+            parts.append("\n## 🔎 탐지")
+            parts.append(r.detection)
         parts.append("\n## 🛡️ 완화 방안")
         parts.append(r.mitigation or "벤더 패치 적용과 노출면 점검을 우선하세요.")
         parts.append("\n## ⚖️ 위험도 / 우선순위")

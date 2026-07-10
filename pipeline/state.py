@@ -64,6 +64,7 @@ class ReportResult:
     meta 에는 model(모델명)·elapsed_sec(소요시간)·persona·error(있으면) 를 담는다.
     """
     attack: str = ""
+    detection: str = ""             # 탐지 지표·규칙(로그 패턴·정규식·SIEM 쿼리/의사코드)
     mitigation: str = ""
     summary_en: str = ""            # 영어 요약 한 줄(논문·해외 공유용)
     lang: str = ""                  # 산출 언어 표기(예: ko+en)
