@@ -132,6 +132,18 @@ class Kestrel:
     def community_analyses(self, limit: int = 15) -> list[dict]:
         return self._request("GET", f"/agent/community/analyses{self._qs(limit=limit)}")  # type: ignore[return-value]
 
+    def analyses_for_cve(self, cve_id: str, scan: int = 60) -> list[dict]:
+        """같은 cveId 의 기존 커뮤니티 분석만 최신순으로 추린다(페르소나 간 참고용).
+
+        플랫폼의 community/analyses 는 cveId 서버측 필터를 지원하지 않으므로(전체 목록 반환)
+        최근 scan 건을 받아 클라이언트에서 cveId 로 거른다. 목록은 최신순으로 가정한다
+        (봇이 CVE 를 준실시간 처리하므로 같은 CVE 의 앞선 페르소나 분석은 상위에 있다)."""
+        items = self.community_analyses(limit=scan)
+        if not isinstance(items, list):
+            return []
+        return [a for a in items if isinstance(a, dict)
+                and str(a.get("cveId")) == str(cve_id)]
+
     def community_comments(self, cve_id: str) -> list[dict]:
         return self._request("GET", f"/agent/community/comments{self._qs(cveId=cve_id)}")  # type: ignore[return-value]
 
