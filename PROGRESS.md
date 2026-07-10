@@ -54,4 +54,33 @@ pipeline/agents/exploitability.py, .env.example (+43/-8). 기존 테스트 63건
 
 ### 남은 일
 - EXAONE-4.5-33B blob 복구(재-pull 또는 텍스트 전용 quant) 후 재검증(선택).
-- 소요 시간 재측정: 유휴 GPU 에서 서술 호출 지연 편차 확인(운영 부담 확정).
+
+## 2026-07-10 — 속도 벤치마크 + 상시 운영(계층2) 시작
+
+### 속도(유휴 GPU, warm, gemma4:31b think off)
+- CVE 1건(1페르소나) ≈ **144초**(범위 122–170). report 호출 ~100초가 지배, narrative는
+  offensive가 김(~55초) vs 방어/분석(~28초). 6연속 처리 저하·메모리 문제 없음(GB10 통합메모리).
+- 처리량: 약 25 분석/시간(풀가동). 플랫폼 한도 40/시간(에이전트당, 분석+댓글+자유글 공용) >
+  GPU 25/시간 → 분석만 게시하면 안전(여유 15).
+
+### 429 안전장치(커밋 781b971)
+- `RateLimited.retry_after`(Retry-After 헤더, 폴백 3600). `state.pending_analyses`+
+  `rate_limited_until` 영속화. `_publish_analysis`가 429 시 결과를 큐에 보관(파이프라인
+  결과 낭비 방지), `_flush_pending`이 사이클 시작 시 FIFO 재게시(Retry-After 존중, 첫 실패에
+  멈춰 순서 유지), 레이트리밋 중엔 새 생성 생략.
+- `AGENT_ANALYSIS_ONLY`(기본 false) — 켜면 분석 게시만(댓글·토론·자유글 생략). 40 카운터
+  경합 방지. 기본 false=기존 전체 루프 유지.
+
+### 상시 운영 .env(gitignore) 및 기동
+- USE_PIPELINE=true, AGENT_INTERVAL=400, gemma4:31b, OLLAMA_THINK=false,
+  AGENT_ANALYSIS_MODEL=gemma4:31b, AGENT_ANALYSIS_ONLY=true, topic/digest 0, persona=방어Agent.
+- `./agentctl.sh start` 로 단일 에이전트 데몬 기동(PID 파일·agent_run.log).
+- 라이브 검증: CVE-2026-50656(--once), CVE-2026-50746(데몬 1사이클) 실게시 성공. 구조화
+  필드 정상(비-KEV·저EPSS는 priority=scheduled/grade=hard 로 정확히 차등). 429 0건, 큐 0,
+  중복 재분석 없음(analyzed_cves), 크래시 없음.
+
+### 남은 결정
+- **3페르소나(공격/방어/분석가) 멀티 에이전트**: 현재 토큰 1개(DGX_1)뿐 → 단일 에이전트만
+  가동 중. 각 페르소나는 별도 토큰 필요(agents.json의 token/tokenEnv, 또는 register_agent).
+  토큰 확보 후 `./agentctl.sh start --profiles agents.json` 로 확장.
+- 상시 운영 1~2시간 관찰(교수님 워크로드 경합 시 지연/스킵), 토큰 rotate.
