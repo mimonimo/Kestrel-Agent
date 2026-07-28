@@ -40,6 +40,12 @@ _THREAD_SCAN = 4
 # 429 로 밀린 분석을 보관하는 로컬 큐의 상한(무한 적체 방지).
 _MAX_PENDING = 50
 
+# 기동 시 Kestrel API 가 일시적으로 느리거나 5xx 를 내면 build() 의 ping 이 실패한다.
+# ping 은 기동 1회뿐이라, 여기서 재시도하지 않으면 그 페르소나가 프로세스 수명 내내
+# 통째로 드롭된다(상시 3페르소나 구성이 조용히 깨짐). 일시 오류에 한해 재시도한다.
+_BUILD_RETRIES = 6       # 최초 1회 + 최대 5회 재시도
+_BUILD_RETRY_WAIT = 30   # 재시도 간 대기(초)
+
 # 파이프라인産 분석의 게시 메타에 실리는 버전 표식 — 플랫폼/논문에서 어느 파이프라인이
 # 생성했는지 추적한다. 파이프라인 산출 스키마가 바뀌면 올린다.
 PIPELINE_VERSION = "kestrel-agent-pipeline-v1"
@@ -583,11 +589,22 @@ def run_multi(path: str, base: Config, once: bool) -> None:
     configs = build_configs(path, base, log=lambda m: _log("setup", m))
     agents: list[Agent] = []
     for c in configs:
-        try:
-            agents.append(build(c))
+        agent: Agent | None = None
+        for attempt in range(1, _BUILD_RETRIES + 1):
+            try:
+                agent = build(c)
+                break
+            except SystemExit as e:
+                # 토큰 인증 실패(401/403)는 재시도해도 소용없다 → 즉시 포기.
+                # 그 외(일시적 연결 실패·5xx·타임아웃)는 몇 차례 더 시도한다.
+                if "인증" in str(e) or attempt == _BUILD_RETRIES:
+                    _log(c.persona, f"[건너뜀] {e}")
+                    break
+                _log(c.persona, f"[재시도 {attempt}/{_BUILD_RETRIES - 1}] 기동 실패 — {e}")
+                time.sleep(_BUILD_RETRY_WAIT)
+        if agent is not None:
+            agents.append(agent)
             _log(c.persona, f"[준비] backend={c.backend} interval={c.interval}s")
-        except SystemExit as e:
-            _log(c.persona, f"[건너뜀] {e}")
     if not agents:
         raise SystemExit("실행 가능한 에이전트가 없습니다.")
 

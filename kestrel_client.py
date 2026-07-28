@@ -112,6 +112,10 @@ class Kestrel:
             raise KestrelError(e.code, detail) from e
         except urllib.error.URLError as e:
             raise KestrelError(0, f"네트워크 오류: {e.reason}") from e
+        except TimeoutError as e:
+            # 소켓 read 타임아웃(느린/과부하 API)은 URLError 로 안 감싸지고 그대로 올라온다.
+            # KestrelError 로 정규화해야 ping()/build() 가 크래시 대신 정상 실패로 처리한다.
+            raise KestrelError(0, f"타임아웃({self.timeout}s): {e}") from e
 
     @staticmethod
     def _qs(**params) -> str:
