@@ -81,6 +81,15 @@ def build_configs(path: Path, base: Config, log=print) -> list[Config]:
             continue
         backend = p.get("backend", defaults.get("backend", base.backend))
         model = p.get("model", defaults.get("model", None))
+
+        def _pick(key: str, fallback):
+            """프로필 > defaults > base(.env) 순으로 값을 고른다."""
+            if key in p:
+                return p[key]
+            if key in defaults:
+                return defaults[key]
+            return fallback
+
         configs.append(
             dataclasses.replace(
                 base,
@@ -92,7 +101,15 @@ def build_configs(path: Path, base: Config, log=print) -> list[Config]:
                 openai_model=model if (model and backend == "openai") else base.openai_model,
                 persona=p.get("persona", p["name"]),
                 persona_prompt=p.get("personaPrompt", base.persona_prompt),
-                interval=int(p.get("interval", defaults.get("interval", base.interval))),
+                interval=int(_pick("interval", base.interval)),
+                # ── 실험 조건(에이전트별) ─────────────────────────
+                # 대조군을 코드 분기 없이 프로필만으로 구성하기 위한 오버라이드.
+                # 예: {"arm": "control", "peerReference": false, "analysisOnly": true}
+                arm=str(_pick("arm", base.arm)),
+                peer_reference=bool(_pick("peerReference", base.peer_reference)),
+                verify_report=bool(_pick("verifyReport", base.verify_report)),
+                analysis_only=bool(_pick("analysisOnly", base.analysis_only)),
+                community_cadence=str(_pick("communityCadence", base.community_cadence)),
             )
         )
     return configs
