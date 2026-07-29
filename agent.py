@@ -389,13 +389,14 @@ class Agent:
 
 
     # ── 2) 동료 글에 댓글 ─────────────────────────────────────
-    def do_comment(self, community: list[dict]) -> None:
+    def do_comment(self, community: list[dict]) -> bool:
+        """동료 분석에 최상위 댓글을 남긴다. 실제로 게시했으면 True."""
         peer = self._pick_peer(community)
         if peer is None:
-            return
+            return False
         text = self.brain.comment_on_peer(peer)
         if len(text.strip()) < 2:
-            return
+            return False
         # 최상위 댓글 — analysisId 필수(이 분석 스레드에 붙도록)
         self.k.post_comment(peer["cveId"], text, analysis_id=peer.get("id"))
         self.state.commented_analyses.add(str(peer.get("id")))
@@ -405,6 +406,7 @@ class Agent:
                 self.state.commented_authors.get(author, 0) + 1
         self.state.save()
         self.log(f"  💬 댓글: {peer['cveId']} (← {peer.get('authorName')})")
+        return True
 
     # ── 3) 알림(내 글에 달린 코멘트)에 답글 ────────────────────
     def do_replies(self) -> None:
@@ -435,9 +437,9 @@ class Agent:
             return c
         return None
 
-    def do_thread_discussion(self, community: list[dict]) -> None:
+    def do_thread_discussion(self, community: list[dict]) -> bool:
         """동료 분석에 달린 *댓글* 을 읽어, 글 작성자가 아니어도 다른 에이전트의
-        댓글에 parentId 로 이어 답해 실제 토론 스레드를 형성한다.
+        댓글에 parentId 로 이어 답해 실제 토론 스레드를 형성한다. 게시했으면 True.
 
         do_comment 는 글(분석) 본문에, do_replies 는 *내 글* 에 달린 알림에만 반응하므로
         제3의 에이전트가 남의 댓글에 끼어드는 경로가 없었다. 이 단계가 그 빈틈을 메운다.
@@ -458,13 +460,14 @@ class Agent:
             self.state.replied_comments.add(str(target.get("id")))
             text = self.brain.reply_in_thread(cid, target, thread)
             if len(text.strip()) < 2:
-                return
+                return False
             # 대댓글 — parentId(부모 댓글)로 스레드에 붙음. analysisId 는 부모에서 상속(있으면 명시).
             self.k.post_comment(cid, text, parent_id=target.get("id"),
                                 analysis_id=target.get("analysisId"))
             self.state.save()
             self.log(f"  🧵 토론: {cid} (← {target.get('authorName')} 댓글에 답)")
-            return  # 사이클당 토론 1건
+            return True  # 사이클당 토론 1건
+        return False
 
     # ── 5) CVE 에 안 묶인 자유 토픽 글(동향 브리핑) ───────────────
     def do_topic_post(self) -> None:
@@ -520,6 +523,17 @@ class Agent:
         self.state.save()
         self.log(f"  🧵 종합글 게시: {title} (postId={out.get('id')})")
 
+    def _do_one_engagement(self, community: list[dict]) -> None:
+        """능동 커뮤니티 활동(동료 댓글/토론) 중 딱 1건만 수행(balanced 페이싱).
+
+        토론↔댓글 순서를 사이클마다 섞어 두 경로가 고루 일어나게 하고, 첫 성공에서
+        멈춰 사이클당 능동 쓰기를 1건으로 제한한다(레이트리밋·GPU 경합 억제)."""
+        actions = [self.do_thread_discussion, self.do_comment]
+        random.shuffle(actions)
+        for act in actions:
+            if act(community):
+                return
+
     # ── 한 사이클 ─────────────────────────────────────────────
     def cycle(self) -> None:
         community = self.k.community_analyses(limit=15)
@@ -527,9 +541,15 @@ class Agent:
             self._flush_pending()  # 지난 사이클 429 로 밀린 분석 먼저 재게시
             self.do_analysis(community)
             if not getattr(self.cfg, "analysis_only", False):
-                self.do_comment(community)
+                # 우리 글에 온 반응(답글)은 대화 지속을 위해 항상 처리.
                 self.do_replies()
-                self.do_thread_discussion(community)
+                # 능동 활동(댓글/토론)은 강도에 따라: balanced=1건, full=전부.
+                if getattr(self.cfg, "community_cadence", "balanced") == "full":
+                    self.do_comment(community)
+                    self.do_thread_discussion(community)
+                else:
+                    self._do_one_engagement(community)
+                # 자유글은 시간게이트(topic_hours/digest_hours)로 자체 페이싱.
                 self.do_topic_post()
                 self.do_community_digest(community)
         except RateLimited as e:

@@ -49,6 +49,10 @@ class Config:
     # 사고에 소진하고 response 가 비어 리포트가 통째로 빈다. 비-thinking 모델은 이 값을 무시.
     analysis_only: bool = False  # True 면 사이클에서 분석 게시만 수행(댓글·토론·자유글 생략).
     # 상시 운영 초기 등 쓰기 한도(에이전트당 시간당)를 분석에 집중하고 싶을 때. 기본 False=전체 루프.
+    community_cadence: str = "balanced"  # analysis_only=False 일 때 커뮤니티 활동 강도.
+    # "balanced"(기본): 분석 주력 + 답글은 항상 + 능동활동(댓글/토론)은 사이클당 1건만
+    #   → 레이트리밋(에이전트당 시간당)·GPU 경합을 억제하며 분석 처리량 유지.
+    # "full": 댓글·토론을 매 사이클 모두 수행(가장 활발하나 쓰기가 몰림).
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -85,6 +89,8 @@ class Config:
             in ("1", "true", "yes", "on"),
             analysis_only=os.environ.get("AGENT_ANALYSIS_ONLY", "").strip().lower()
             in ("1", "true", "yes", "on"),
+            community_cadence=(os.environ.get("AGENT_COMMUNITY_CADENCE", "balanced").strip().lower()
+                               or "balanced"),
         )
 
     def validate(self) -> None:
