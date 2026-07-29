@@ -197,7 +197,7 @@ class TestPipelinePublishMapping(unittest.TestCase):
         self.assertIs(extra["kev_listed"], True)
         self.assertEqual(extra["validation_confidence"], 1.0)  # 3규칙 전부 통과
         self.assertEqual(extra["exploitability_grade"], "easy")  # KEV → easy
-        self.assertEqual(extra["pipeline_version"], "kestrel-agent-pipeline-v1")
+        self.assertEqual(extra["pipeline_version"], "kestrel-agent-pipeline-v2")
         # Log4j 레코드는 products↔description 일치 → 품질 신호 없음 → 필드 자체 생략
         self.assertNotIn("quality_flags", extra)
 

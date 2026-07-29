@@ -19,6 +19,11 @@ class PersonaConfig:
     system: str              # system 프롬프트에 덧붙일 관점 선언
     emphasis: str            # user 프롬프트에 넣을 '무엇을 강조하라'
     tone: str                # 어조 지시
+    focus: tuple[str, ...]   # 깊게 쓸 섹션 키(attack|impact|chaining|detection|mitigation)
+    # focus 가 필요한 이유: emphasis 로 '강조하라'고 말만 해서는 부족했다. 모든 페르소나에게
+    # 똑같은 번호 스캐폴드를 주면 모델이 그것을 그대로 따라 써서 세 리포트의 구조·도입부가
+    # 사실상 같아진다(실측: 같은 CVE 의 excerpt 자카드 0.57~0.70). focus 섹션에만 상세
+    # 지침을 주고 나머지는 짧게 요구해, 분량 자체를 관점에 따라 다르게 배분한다.
 
 
 _OFFENSIVE = PersonaConfig(
@@ -33,6 +38,7 @@ _OFFENSIVE = PersonaConfig(
              "익스플로잇 코드·무기화된 전체 페이로드는 만들지 않습니다. '탐지'·'완화'는 방어자가 "
              "알아야 할 핵심만 짧게.",
     tone="짧고 직설적인 공격자 시점.",
+    focus=("attack", "chaining"),
 )
 
 _DEFENSIVE = PersonaConfig(
@@ -46,6 +52,7 @@ _DEFENSIVE = PersonaConfig(
              "영향·검증 방법·우선순위, 패치 이후에도 남는 잔여 리스크, 인시던트 대응 플레이북"
              "(무엇을 먼저 확인할지). '공격 기법'은 방어에 필요한 만큼만.",
     tone="담담한 운영자 어조. '오늘 당장 적용할 임시 차단 한 가지'를 반드시 포함.",
+    focus=("detection", "mitigation"),
 )
 
 _ANALYST = PersonaConfig(
@@ -58,6 +65,7 @@ _ANALYST = PersonaConfig(
              "영향 범위(영향 제품·노출 규모)와 비즈니스 리스크, 우선순위 판단의 근거와 대응 리소스 "
              "판단. 근거가 없으면 '추정:' 또는 '미관측'이라고 적으세요.",
     tone="브리핑하듯 간결·중립적.",
+    focus=("impact",),
 )
 
 _PERSONAS: dict[str, PersonaConfig] = {p.key: p for p in (_OFFENSIVE, _DEFENSIVE, _ANALYST)}

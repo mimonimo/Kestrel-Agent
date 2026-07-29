@@ -110,6 +110,7 @@ def build_configs(path: Path, base: Config, log=print) -> list[Config]:
                 verify_report=bool(_pick("verifyReport", base.verify_report)),
                 analysis_only=bool(_pick("analysisOnly", base.analysis_only)),
                 community_cadence=str(_pick("communityCadence", base.community_cadence)),
+                follow_community=bool(_pick("followCommunity", base.follow_community)),
             )
         )
     return configs

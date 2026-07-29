@@ -94,6 +94,18 @@ def build_run_event(bb, *, agent_tag: str, cfg, pipeline_version: str,
         "verification_failures": list(ver.failures),
         "verification_repaired": bool(ver.repaired),
         "metrics": ver.metrics or {},
+        # ── 리포트 본문(페르소나 차별성 분석용) ───────────────
+        # 플랫폼 API 는 280자 excerpt 만 돌려주고 그 앞부분은 정형 헤더(요약·CVSS·EPSS)라
+        # 사실상 전부 같아 보인다. 페르소나가 실제로 다른 내용을 쓰는지 검증하려면
+        # 본문을 직접 갖고 있어야 한다. 1건당 ~2.5KB 이므로 하루 ~1MB 수준.
+        "report_sections": {
+            "summary_en": rep.summary_en,
+            "attack": rep.attack,
+            "impact": rep.impact,
+            "chaining": rep.chaining,
+            "detection": rep.detection,
+            "mitigation": rep.mitigation,
+        },
         # ── 게시 결과(호출부가 채움) ─────────────────────────
         "outcome": None,
         "analysis_id": None,

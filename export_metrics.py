@@ -69,7 +69,7 @@ def flat(ev: dict) -> dict:
     out = {k: v for k, v in ev.items()
            if k not in ("config", "metrics", "peer_personas", "cwes",
                         "validation_mismatches", "quality_flags", "audit_log",
-                        "verification_failures")}
+                        "verification_failures", "report_sections")}
     for k, v in (ev.get("config") or {}).items():
         out[f"cfg_{k}"] = v
     for k, v in (ev.get("metrics") or {}).items():

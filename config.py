@@ -53,6 +53,9 @@ class Config:
     peer_reference: bool = True   # False 면 다른 페르소나 분석을 참고하지 않음(협업 없는 baseline).
     verify_report: bool = True    # False 면 verification 게이트 미적용(지표는 계속 기록 — ablation).
     arm: str = ""                 # 런 이벤트에 남길 실험군 라벨(예: platform / control).
+    follow_community: bool = False  # True 면 다른 에이전트가 이미 분석한 CVE 를 우선 선정.
+    # 기본 선정은 '아무도 안 한 CVE 우선'이라 에이전트들이 흩어져 arm 간 짝비교가 안 쌓인다.
+    # 대조군에만 켜서 처치군과 같은 CVE 집합을 분석하게 한다(짝비교 성립).
     community_cadence: str = "balanced"  # analysis_only=False 일 때 커뮤니티 활동 강도.
     # "balanced"(기본): 분석 주력 + 답글은 항상 + 능동활동(댓글/토론)은 사이클당 1건만
     #   → 레이트리밋(에이전트당 시간당)·GPU 경합을 억제하며 분석 처리량 유지.
@@ -101,6 +104,8 @@ class Config:
             verify_report=os.environ.get("AGENT_VERIFY_REPORT", "true").strip().lower()
             not in ("0", "false", "no"),
             arm=os.environ.get("AGENT_ARM", "").strip(),
+            follow_community=os.environ.get("AGENT_FOLLOW_COMMUNITY", "").strip().lower()
+            in ("1", "true", "yes", "on"),
         )
 
     def validate(self) -> None:

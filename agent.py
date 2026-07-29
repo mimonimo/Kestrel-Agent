@@ -49,7 +49,9 @@ _BUILD_RETRY_WAIT = 30   # 재시도 간 대기(초)
 
 # 파이프라인産 분석의 게시 메타에 실리는 버전 표식 — 플랫폼/논문에서 어느 파이프라인이
 # 생성했는지 추적한다. 파이프라인 산출 스키마가 바뀌면 올린다.
-PIPELINE_VERSION = "kestrel-agent-pipeline-v1"
+# v2: 페르소나별 섹션 깊이 분화(focus) + 번호 스캐폴드 복창 방지. v1 과 생성물이
+# 달라지므로 런 이벤트에서 반드시 구분돼야 한다(같은 arm 이라도 별개 조건).
+PIPELINE_VERSION = "kestrel-agent-pipeline-v2"
 
 
 def _log(tag: str, msg: str) -> None:
@@ -143,6 +145,37 @@ class Agent:
         return eligible[0]
 
     # ── 1) 분석할 CVE 한 건 선정 → 분석 → 게시 ────────────────
+    def _pick_following(self) -> tuple[dict | None, str, str]:
+        """다른 에이전트가 이미 분석한 CVE 를 따라간다(대조군 짝비교용).
+
+        왜 필요한가: 기본 선정은 '아무도 분석 안 한 CVE 우선'이라 에이전트들이 서로 다른
+        CVE 로 흩어진다. 커뮤니티 활성화엔 좋지만, arm 간 비교는 **같은 CVE** 를 양쪽이
+        분석해야 성립하므로 대조군이 자연 겹침을 기다리면 표본이 거의 안 쌓인다.
+
+        관점이 많이 붙은 CVE 를 먼저 고른다(짝이 최대한 많이 생기도록).
+        max_perspectives 상한은 적용하지 않는다 — 대조군은 커뮤니티에 관점을 '더하는' 게
+        아니라 같은 대상에 대한 독립 표본을 만드는 것이라 상한의 취지에 해당하지 않는다.
+        """
+        try:
+            rows = self.k.community_analyses(limit=50)
+        except KestrelError:
+            return None, "", ""
+        tally: dict[str, int] = {}
+        for a in rows or []:
+            cid = a.get("cveId")
+            if not cid or self._is_self(a.get("authorName"), a.get("authorPersona")):
+                continue
+            tally[cid] = tally.get(cid, 0) + 1
+        cands = sorted((c for c in tally if c not in self.state.analyzed_cves),
+                       key=lambda c: -tally[c])
+        for cid in cands:
+            try:
+                detail = self.k.get_cve(cid)
+            except KestrelError:
+                continue  # kestrel 에 없으면 건너뜀
+            return detail, "", f"추종(관점 {tally[cid]}개)"
+        return None, "", ""
+
     def _pick_from_feeds(self, counts: dict[str, int]) -> tuple[dict | None, str, str]:
         """외부 보안 보도에서 *실제로 화제인* CVE 중 kestrel 에 존재하는 것을 고른다."""
         if not self.cfg.use_feeds:
@@ -173,10 +206,17 @@ class Agent:
         if time.time() < self.state.rate_limited_until:
             self.log("· 레이트리밋 대기 중 — 새 분석 생성 생략(큐 재게시 우선).")
             return
-        detail, context, src = self._pick_from_feeds(counts)
-        if detail is not None:
-            self.log(f"· 외부 보도 기반 선정: {detail.get('cveId')} (출처 {src})")
-        else:
+        # 추종 모드(대조군): 다른 에이전트가 분석한 CVE 를 우선 따라가 arm 간 짝을 만든다.
+        detail, context, src = (None, "", "")
+        if getattr(self.cfg, "follow_community", False):
+            detail, context, src = self._pick_following()
+            if detail is not None:
+                self.log(f"· 추종 선정: {detail.get('cveId')} ({src})")
+        if detail is None:
+            detail, context, src = self._pick_from_feeds(counts)
+            if detail is not None:
+                self.log(f"· 외부 보도 기반 선정: {detail.get('cveId')} (출처 {src})")
+        if detail is None:
             cands = self.k.list_cves(limit=50)  # 풀을 넓혀 다양한 CVE 가 선정되도록
             eligible = [c for c in cands if self._can_analyze(c["cveId"], counts)]
             eligible.sort(key=lambda c: counts.get(c["cveId"], 0))  # 새 CVE(0건) 우선
