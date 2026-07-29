@@ -1,4 +1,4 @@
-"""계층 2 파이프라인 뼈대 테스트 — 7개 스텁이 순서대로 돌고 audit_log 에 남는지,
+"""계층 2 파이프라인 뼈대 테스트 — 8개 노드가 순서대로 돌고 audit_log 에 남는지,
 supervisor 의 handoff 회귀·한도 라우팅이 규격대로 동작하는지 검증한다.
 """
 import unittest
@@ -9,17 +9,17 @@ from pipeline.supervisor import Supervisor, run_pipeline
 
 _EXPECTED_ORDER = [
     "collector", "enrichment", "cross_validation", "exploitability",
-    "context", "prioritization", "report",
+    "context", "prioritization", "report", "verification",
 ]
 
 
 class TestPipelineSkeleton(unittest.TestCase):
-    def test_seven_stubs_run_in_order(self):
+    def test_all_stubs_run_in_order(self):
         bb = Blackboard(cve_id="CVE-2021-44228", persona="공격Agent")
         run_pipeline(bb)
         names = [e["agent"] for e in bb.audit_log]
         self.assertEqual(names, _EXPECTED_ORDER)
-        self.assertEqual(len(bb.audit_log), 7)
+        self.assertEqual(len(bb.audit_log), 8)
         self.assertFalse(bb.needs_human_review)
         self.assertIsNone(bb.handoff)
 

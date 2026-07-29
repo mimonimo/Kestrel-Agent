@@ -28,6 +28,7 @@ import sys
 import threading
 import time
 
+import analytics
 from brain import Brain, make_brain
 from config import Config
 from kestrel_client import Kestrel, KestrelError, RateLimited
@@ -63,6 +64,9 @@ class Agent:
         self.state = state
         self.tag = tag  # 로그 식별용(페르소나)
         self.brain.log = self.log
+        # 파이프라인이 만든 런 이벤트를 게시 결과가 정해질 때까지 잠시 보관한다.
+        # (생성 시점엔 outcome 을 모르고, 게시 시점엔 blackboard 가 없으므로.)
+        self._run_event: dict | None = None
 
     def log(self, msg: str) -> None:
         _log(self.tag, msg)
@@ -191,6 +195,7 @@ class Agent:
         body, meta = self._make_analysis_body(detail, context, mem_ctx)
         if len(body.strip()) < 20:
             self.log(f"  분석 본문이 너무 짧아 건너뜀: {cid}")
+            self._finalize_run_event("skipped_short")
             return
         self._publish_analysis(cid, body, meta, detail.get("severity"))
 
@@ -206,6 +211,8 @@ class Agent:
             self.state.save()
             self.log(f"  ⏳ 429 — 게시 보류(큐 {len(self.state.pending_analyses)}건), "
                      f"{e.retry_after}s 후 재시도")
+            # 표본은 이미 '생성'됐다(품질 분석 대상). 게시만 지연된 상태로 기록한다.
+            self._finalize_run_event("queued_429")
             return False
         self._record_published(cid, body, sev, out)
         return True
@@ -220,6 +227,8 @@ class Agent:
             self.log(f"  ⚠️ 큐 상한({_MAX_PENDING}) 초과 — 폐기: {dropped.get('cveId')}")
 
     def _record_published(self, cid: str, body: str, sev: str | None, out: dict) -> None:
+        # 큐에서 재게시된 건은 이미 queued_429 로 기록돼 있어 여기서 조용히 무시된다.
+        self._finalize_run_event("published", out.get("id"))
         self.state.analyzed_cves.add(cid)
         # 핵심 요지를 메모리에 남겨 다음 분석이 이어받게 한다.
         self.state.memory.append(f"{cid}({sev or '?'}): {self._key_points(body)}")
@@ -269,20 +278,43 @@ class Agent:
         from pipeline.supervisor import run_pipeline  # noqa: PLC0415
 
         cid = detail.get("cveId")
+        # 앞 사이클에서 게시 예외 등으로 결말을 못 적은 이벤트가 남아 있으면 유실 대신 기록.
+        if self._run_event is not None:
+            self._finalize_run_event("publish_failed")
         bb = Blackboard(cve_id=cid, persona=self.cfg.persona)
         # 봇이 이미 쓰는 kestrel·llm 클라이언트를 재사용(새 클라이언트 만들지 않음).
         # LLM 노드는 AGENT_ANALYSIS_MODEL(있으면)을 쓰고, 없으면 클라이언트 기본 모델.
         ctx = PipelineContext(kestrel=self.k, llm=getattr(self.brain, "client", None),
-                              model=(self.cfg.analysis_model or None))
+                              model=(self.cfg.analysis_model or None),
+                              peer_reference=self.cfg.peer_reference,
+                              verify_report=self.cfg.verify_report,
+                              arm=self.cfg.arm)
         try:
             run_pipeline(bb, ctx)
         except Exception as e:  # noqa: BLE001 — 한 CVE 실패가 봇 루프를 멈추지 않게
             self.log(f"  · 파이프라인 실행 실패({type(e).__name__}) — 이번 사이클 스킵")
             return "", {}
+        # 계측: 실패한 표본도 남긴다(생성됐지만 버려진 건을 셀 수 있어야 편향 없는 집계가 된다).
+        self._run_event = analytics.build_run_event(
+            bb, agent_tag=self.tag, cfg=self.cfg, pipeline_version=PIPELINE_VERSION)
         if bb.needs_retry or not (bb.report.attack or bb.report.mitigation):
             self.log(f"  · 파이프라인 결과 미완(needs_retry={bb.needs_retry}) — 이번 사이클 스킵")
+            self._finalize_run_event("skipped_incomplete")
             return "", {}
+        if bb.verification.failures:
+            self.log(f"  · 검증 지적 {bb.verification.failures}"
+                     f"{' → 재작성함' if bb.verification.repaired else ''}")
         return self._pipeline_report_to_md(bb), self._pipeline_publish_meta(bb)
+
+    def _finalize_run_event(self, outcome: str, analysis_id: str | None = None) -> None:
+        """보관 중인 런 이벤트에 게시 결과를 적어 기록하고 비운다(중복 기록 방지)."""
+        ev = self._run_event
+        self._run_event = None
+        if ev is None:
+            return  # brain 경로(USE_PIPELINE=false)거나 이미 기록됨
+        ev["outcome"] = outcome
+        ev["analysis_id"] = analysis_id
+        analytics.append(ev)
 
     @staticmethod
     def _pipeline_publish_meta(bb) -> dict:

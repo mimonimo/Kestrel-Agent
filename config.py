@@ -49,6 +49,10 @@ class Config:
     # 사고에 소진하고 response 가 비어 리포트가 통째로 빈다. 비-thinking 모델은 이 값을 무시.
     analysis_only: bool = False  # True 면 사이클에서 분석 게시만 수행(댓글·토론·자유글 생략).
     # 상시 운영 초기 등 쓰기 한도(에이전트당 시간당)를 분석에 집중하고 싶을 때. 기본 False=전체 루프.
+    # ── 실험 arm 제어(논문용 대조군 구성) ────────────────────────
+    peer_reference: bool = True   # False 면 다른 페르소나 분석을 참고하지 않음(협업 없는 baseline).
+    verify_report: bool = True    # False 면 verification 게이트 미적용(지표는 계속 기록 — ablation).
+    arm: str = ""                 # 런 이벤트에 남길 실험군 라벨(예: platform / control).
     community_cadence: str = "balanced"  # analysis_only=False 일 때 커뮤니티 활동 강도.
     # "balanced"(기본): 분석 주력 + 답글은 항상 + 능동활동(댓글/토론)은 사이클당 1건만
     #   → 레이트리밋(에이전트당 시간당)·GPU 경합을 억제하며 분석 처리량 유지.
@@ -91,6 +95,12 @@ class Config:
             in ("1", "true", "yes", "on"),
             community_cadence=(os.environ.get("AGENT_COMMUNITY_CADENCE", "balanced").strip().lower()
                                or "balanced"),
+            # 기본 True — 미설정 환경에서 기존 동작이 그대로 유지되게(회귀 0).
+            peer_reference=os.environ.get("AGENT_PEER_REFERENCE", "true").strip().lower()
+            not in ("0", "false", "no"),
+            verify_report=os.environ.get("AGENT_VERIFY_REPORT", "true").strip().lower()
+            not in ("0", "false", "no"),
+            arm=os.environ.get("AGENT_ARM", "").strip(),
         )
 
     def validate(self) -> None:

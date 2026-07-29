@@ -95,7 +95,11 @@ _LOG4 = {
     "cveId": "CVE-2021-44228", "severity": "critical", "cvssScore": 10.0,
     "cvssVector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H",
     "kevListed": True, "types": ["CWE-917"], "products": ["Apache Log4j2"],
-    "description": "Apache Log4j2 JNDI lookup remote code execution.",
+    "description": (
+        "Apache Log4j2 JNDI features used in configuration, log messages, and parameters "
+        "do not protect against attacker controlled LDAP and other JNDI related endpoints. "
+        "An attacker who can control log messages or log message parameters can execute "
+        "arbitrary code loaded from LDAP servers when message lookup substitution is enabled."),
 }
 _GOOD_REPORT = (
     "SUMMARY_EN: Log4Shell unauthenticated RCE.\n"

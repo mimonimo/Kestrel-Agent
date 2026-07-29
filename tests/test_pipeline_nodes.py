@@ -1,7 +1,7 @@
 """Enrichment·Exploitability·Context·Prioritization + EPSS 소스 — hermetic 검증.
 
 EPSS 실제 호출은 http 주입/ctx.epss_fetch 주입으로 대체(네트워크 없음).
-7개 노드 전체 완주(audit 7x ok)와 각 노드가 blackboard 를 채우는지 확인한다.
+8개 노드 전체 완주(audit 8x ok)와 각 노드가 blackboard 를 채우는지 확인한다.
 """
 import os
 import tempfile
@@ -245,7 +245,7 @@ class TestPrioritization(unittest.TestCase):
         self.assertEqual(prep("방어Agent"), "monitor")
 
 
-# ── 7개 노드 전체 완주 ─────────────────────────────────────
+# ── 8개 노드 전체 완주 ─────────────────────────────────────
 class FakeKestrel:
     def get_cve(self, cid):
         return dict(_LOG4)
@@ -255,7 +255,7 @@ class FakeKestrel:
 
 
 class TestFullPipeline(unittest.TestCase):
-    def test_all_seven_nodes_ok_and_filled(self):
+    def test_all_nodes_ok_and_filled(self):
         d = tempfile.mkdtemp()
         ctx = PipelineContext(
             kestrel=FakeKestrel(), llm=FakeLLM("서술"), data_dir=d,
@@ -270,7 +270,7 @@ class TestFullPipeline(unittest.TestCase):
             names_status,
             [("collector", "ok"), ("enrichment", "ok"), ("cross_validation", "ok"),
              ("exploitability", "ok"), ("context", "ok"), ("prioritization", "ok"),
-             ("report", "ok")])
+             ("report", "ok"), ("verification", "ok")])
         self.assertFalse(bb.needs_human_review)
         # 각 노드가 실제로 값을 채웠는지
         self.assertTrue(bb.enriched["cvss_metrics"])

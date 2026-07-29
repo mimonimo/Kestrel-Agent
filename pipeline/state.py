@@ -72,6 +72,33 @@ class ReportResult:
     lang: str = ""                  # 산출 언어 표기(예: ko+en)
     meta: dict = field(default_factory=dict)
 
+    # 실험 계측용 — 이 리포트가 '다른 에이전트의 분석'을 실제로 몇 건 봤는지와 그 원문.
+    # 플랫폼 이점(협업)의 독립변수라서 반드시 보존한다. peer 가 없으면 빈 리스트.
+    peer_personas: list[str] = field(default_factory=list)
+    peer_excerpts: list[str] = field(default_factory=list)
+    facts: str = ""                 # 프롬프트에 실린 [사실] 블록(환각 검증의 기준선)
+
+    def sections(self) -> dict:
+        """섹션 키 → 본문. metrics/verification 이 공통으로 쓰는 형태."""
+        return {"attack": self.attack, "impact": self.impact, "chaining": self.chaining,
+                "detection": self.detection, "mitigation": self.mitigation}
+
+
+@dataclass
+class VerificationResult:
+    """Verification 결과 — 결정론 규칙으로 리포트 산출물 자체를 검사한 결과.
+
+    cross_validation 이 '입력 데이터'를 검증한다면, 여기는 'LLM 출력'을 검증한다.
+    checks 는 규칙명→통과여부, metrics 는 pipeline.metrics 산출 수치 전체.
+    repaired=True 면 실패를 감지해 LLM 재작성을 1회 수행했다는 뜻.
+    """
+    passed: bool = True
+    checks: dict = field(default_factory=dict)
+    failures: list[str] = field(default_factory=list)
+    metrics: dict = field(default_factory=dict)
+    repaired: bool = False
+    repair_error: str = ""
+
 
 @dataclass
 class Blackboard:
@@ -86,6 +113,7 @@ class Blackboard:
     context: ContextResult = field(default_factory=ContextResult)
     priority: PriorityResult = field(default_factory=PriorityResult)
     report: ReportResult = field(default_factory=ReportResult)
+    verification: VerificationResult = field(default_factory=VerificationResult)
 
     # 라우팅·감사
     handoff: str | None = None          # 에이전트가 되돌려 보내고 싶은 대상 이름
@@ -117,3 +145,9 @@ class PipelineContext:
     report_lang: str = "ko"         # Report 본문 언어(ko|en). 항상 영어 요약 한 줄은 함께 낸다
     epss_fetch: object | None = None  # callable(cveId)->{'epss','percentile'}|None. None→FIRST.org 기본 조회
     model: str | None = None        # LLM 노드(Report·Exploitability)가 쓸 모델명. None→클라이언트 기본 모델
+    # ── 실험 arm 제어 ────────────────────────────────────────
+    # peer_reference=False 면 Report 가 다른 페르소나 분석을 조회·주입하지 않는다.
+    # = '플랫폼 협업 없음' 대조군. 코드 분기 없이 설정만으로 baseline 을 만든다.
+    peer_reference: bool = True
+    verify_report: bool = True      # False 면 verification 노드가 검사 없이 통과(ablation 용)
+    arm: str = ""                   # 런 이벤트에 남길 실험군 라벨(예: 'platform', 'control')

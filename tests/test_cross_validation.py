@@ -120,8 +120,8 @@ class TestCrossValidation(unittest.TestCase):
         bb = Blackboard(cve_id="CVE-2021-44228")
         _record(bb, bad)
         cross_validation(bb, ctx)
-        # confidence 는 확정 3규칙만: severity-score·vector-score 실패, vector-format 통과 → 1/3
-        self.assertEqual(bb.validation.confidence, 0.333)
+        # 확정 5규칙 중 severity-score·vector-score 실패 → 3/5. 라우팅은 '실패 2건 이상' 기준.
+        self.assertEqual(bb.validation.confidence, 0.6)
         rules = {m["rule"] for m in bb.validation.mismatches}
         self.assertEqual(rules, {"severity_score_band", "vector_score_match"})
         # products 불일치는 mismatches 가 아니라 quality_flags 로만
@@ -132,7 +132,7 @@ class TestCrossValidation(unittest.TestCase):
         self.assertEqual(bb.validation.adopted_values["severity"], "critical")
 
     def test_products_mismatch_is_quality_flag_not_confidence(self):
-        """products↔description 불일치만 있으면 confidence 는 1.0(3규칙 통과), handoff 없음."""
+        """products↔description 불일치만 있으면 confidence 는 1.0(확정 규칙 전부 통과), handoff 없음."""
         ctx, d = self._ctx()
         rec = dict(_LOG4SHELL, products=["Totally Unrelated Widget"])
         bb = Blackboard(cve_id="CVE-2021-44228")
@@ -155,7 +155,7 @@ class TestCrossValidation(unittest.TestCase):
         bb = Blackboard(cve_id="CVE-2021-44228")
         _record(bb, rec)
         cross_validation(bb, ctx)
-        self.assertEqual(bb.validation.confidence, 1.0)  # 확정 3규칙엔 영향 없음
+        self.assertEqual(bb.validation.confidence, 1.0)  # 확정 규칙엔 영향 없음
         self.assertIsNone(bb.handoff)
         flag = next(q for q in bb.validation.quality_flags
                     if q["rule"] == "products_description")
@@ -184,10 +184,14 @@ class TestCrossValidation(unittest.TestCase):
         self.assertEqual(ev["cveId"], "CVE-2021-44228")
         self.assertEqual(ev["confidence"], 1.0)
         self.assertIn("ts", ev)
-        # confidence 규칙(3개)과 quality_flags 가 분리 기록됨
+        # confidence 규칙(5개)과 quality_flags 가 분리 기록됨
         self.assertEqual([r["rule"] for r in ev["rules"]],
-                         ["severity_score_band", "vector_format", "vector_score_match"])
+                         ["severity_score_band", "vector_format", "vector_score_match",
+                          "vector_completeness", "impact_severity_coherence"])
         self.assertIn("quality_flags", ev)
+        # 품질 규칙도 상태가 함께 남는다(참고용 — confidence 와 분리)
+        self.assertEqual([r["rule"] for r in ev["quality_rules"]],
+                         ["products_description", "description_sufficiency", "cwe_present"])
 
 
 # ── 엔드투엔드(supervisor 경유) ────────────────────────────
@@ -200,11 +204,11 @@ class TestEndToEnd(unittest.TestCase):
         Supervisor().run(bb, ctx)
         self.assertEqual(bb.validation.confidence, 1.0)
         self.assertFalse(bb.needs_human_review)
-        # 7개 노드가 최소 한 번씩(회귀 없음) 실행
+        # 8개 노드가 최소 한 번씩(회귀 없음) 실행
         self.assertEqual(
             [e["agent"] for e in bb.audit_log],
             ["collector", "enrichment", "cross_validation", "exploitability",
-             "context", "prioritization", "report"])
+             "context", "prioritization", "report", "verification"])
 
     def test_full_pipeline_inconsistent_escalates(self):
         d = tempfile.mkdtemp()

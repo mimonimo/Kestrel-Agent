@@ -92,10 +92,10 @@ def _peer_key(entry: dict) -> str:
     return resolve_persona(src).key
 
 
-def _peer_reference(bb, ctx, own_key: str) -> tuple[str, int]:  # noqa: ANN001
+def _peer_reference(bb, ctx, own_key: str) -> tuple[str, list[dict]]:  # noqa: ANN001
     """같은 CVE 의 '다른 페르소나' 기존 분석을 가드가 붙은 참고 블록으로 만든다.
 
-    반환: (프롬프트에 끼울 참고 블록, 사용한 참고 수). 아래 경우 모두 ("", 0) 로
+    반환: (프롬프트에 끼울 참고 블록, 실제 사용한 참고 엔트리 목록). 아래 경우 모두 ("", []) 로
     그레이스풀하게 독립 분석이 되게 한다:
       - kestrel 미주입(스켈레톤/테스트) 또는 cve_id 없음,
       - 조회 실패(네트워크/API 오류 — 예외를 여기서 흡수해 봇이 멈추지 않게),
@@ -105,12 +105,15 @@ def _peer_reference(bb, ctx, own_key: str) -> tuple[str, int]:  # noqa: ANN001
     """
     kestrel = getattr(ctx, "kestrel", None) if ctx is not None else None
     cve_id = getattr(bb, "cve_id", None)
+    # 대조군(peer_reference=False)은 조회 자체를 하지 않는다 — '플랫폼 협업 없음' arm.
+    if ctx is not None and not getattr(ctx, "peer_reference", True):
+        return "", []
     if kestrel is None or not cve_id:
-        return "", 0
+        return "", []
     try:
         rows = kestrel.analyses_for_cve(cve_id, scan=_PEER_SCAN)
     except Exception:  # noqa: BLE001 — 참고 조회 실패는 독립 분석으로 흡수(그레이스풀)
-        return "", 0
+        return "", []
 
     # 자기 페르소나 제외 + 인용할 내용(excerpt) 있는 것만, 페르소나 다양성 우선으로 소수 선택.
     picked: list[dict] = []
@@ -128,7 +131,7 @@ def _peer_reference(bb, ctx, own_key: str) -> tuple[str, int]:  # noqa: ANN001
         if len(picked) >= _PEER_MAX:
             break
     if not picked:
-        return "", 0
+        return "", []
 
     blocks = []
     for i, a in enumerate(picked, 1):
@@ -157,7 +160,7 @@ def _peer_reference(bb, ctx, own_key: str) -> tuple[str, int]:  # noqa: ANN001
         + "\n".join(blocks)
         + "\n[참고 끝 — 위는 검증 전 참고이며 확정 서술의 근거로 삼지 마세요]\n"
     )
-    return block, len(picked)
+    return block, picked
 
 
 def _prompt(bb, persona, report_lang: str, peer_block: str = "") -> tuple[str, str]:  # noqa: ANN001
@@ -270,7 +273,12 @@ def report(bb, ctx) -> None:  # noqa: ANN001
     used_model = model or _model_name(client)
     # 단계2: 같은 CVE 의 다른 페르소나 분석을 (있으면) 가드와 함께 참고로 주입.
     # 실패·없음이면 빈 문자열 → 기존과 동일한 독립 분석(그레이스풀).
-    peer_block, peer_used = _peer_reference(bb, ctx, persona.key)
+    peer_block, picked = _peer_reference(bb, ctx, persona.key)
+    peer_used = len(picked)
+    # 실험 계측용 보존 — 협업(peer) 노출량과 그 원문은 플랫폼 이점 분석의 독립변수다.
+    bb.report.peer_personas = [_peer_key(a) for a in picked]
+    bb.report.peer_excerpts = [(a.get("excerpt") or "") for a in picked]
+    bb.report.facts = _facts(bb)
     system, user = _prompt(bb, persona, report_lang, peer_block)
 
     started = time.time()
