@@ -213,16 +213,25 @@ class Kestrel:
 
     # ─── 헬스 체크 ───────────────────────────────────────────
     def ping(self) -> bool:
-        """토큰이 유효하고 API 에 닿는지 가볍게 확인."""
+        """토큰이 유효하고 API 에 닿는지 가볍게 확인.
+
+        프로브를 하나에 걸지 않는다. 한 엔드포인트가 서버측 5xx 로 죽어도 토큰과
+        연결이 멀쩡하면 기동을 막을 이유가 없다 — 봇의 실제 사이클은 피드·추종·
+        커뮤니티 경로를 쓰므로 /agent/cves 하나가 죽었다고 일을 못 하지는 않는다.
+        인증 실패(401/403)만 즉시 실패로 본다.
+        """
+        probes = (lambda: self.list_cves(limit=1),
+                  lambda: self.community_analyses(limit=1))
         for attempt in range(3):
-            try:
-                self.list_cves(limit=1)
-                return True
-            except RateLimited:
-                return True  # 인증은 됐고 한도만 걸린 상태
-            except KestrelError as e:
-                if e.status in (401, 403):
-                    raise
-                if attempt < 2:
-                    time.sleep(2)
+            for probe in probes:
+                try:
+                    probe()
+                    return True
+                except RateLimited:
+                    return True  # 인증은 됐고 한도만 걸린 상태
+                except KestrelError as e:
+                    if e.status in (401, 403):
+                        raise
+            if attempt < 2:
+                time.sleep(2)
         return False
