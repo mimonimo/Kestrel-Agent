@@ -241,3 +241,35 @@ class TestPublishTextTidying(unittest.TestCase):
 
     def test_underscore_emphasis_stripped(self):
         self.assertEqual(KC._strip_emphasis("__굵게__ 표시"), "굵게 표시")
+
+
+class TestFenceUnindent(unittest.TestCase):
+    """목록 안에 깊게 들여쓴 코드펜스 — CommonMark 가 펜스로 읽지 않아 문서가 깨진다."""
+
+    def test_deeply_indented_fence_is_pulled_left(self):
+        src = ("  3. 프로세스 모니터링\n"
+               "     ```\n"
+               "     SELECT pid FROM processes\n"
+               "     ```\n"
+               "  → 탐지.")
+        out = KC._unindent_broken_fences(src)
+        self.assertIn("\n```\n", out)
+        self.assertIn("SELECT pid FROM processes", out)
+        self.assertNotIn("     ```", out)
+
+    def test_shallow_fence_is_left_alone(self):
+        """0~3칸 펜스는 정상 렌더링되므로 건드리면 안 된다."""
+        src = "- 예시\n  ```\n  SELECT 1\n  ```\n"
+        self.assertEqual(KC._unindent_broken_fences(src), src)
+
+    def test_content_indentation_inside_block_survives(self):
+        src = ("    ```\n"
+               "    SELECT a,\n"
+               "           b\n"
+               "    ```\n")
+        out = KC._unindent_broken_fences(src)
+        self.assertIn("SELECT a,\n       b", out)
+
+    def test_text_without_fences_is_unchanged(self):
+        src = "그냥 문단입니다.\n두 번째 줄."
+        self.assertEqual(KC._unindent_broken_fences(src), src)

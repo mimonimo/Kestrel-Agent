@@ -48,6 +48,39 @@ def _ascii_cve_ids(text: str) -> str:
                             text or "")
 
 
+_FENCE_RE = re.compile(r"^(\s*)```")
+
+
+def _unindent_broken_fences(text: str) -> str:
+    """4칸 이상 들여쓴 코드펜스를 왼쪽 끝으로 당긴다.
+
+    CommonMark 에서 여는 펜스는 3칸까지만 들여쓸 수 있다. 4칸부터는 펜스가 아니라
+    들여쓰기 코드블록으로 읽혀서 ``` 가 글자 그대로 찍히고 그 뒤 문서가 통째로
+    깨진다. 방어 페르소나가 목록 안에 SIEM 쿼리를 넣을 때 이 형태가 자주 나온다.
+
+    이미 깨져 있는 블록만 손댄다 — 0~3칸 펜스는 정상 렌더링되므로 그대로 둔다.
+    """
+    lines = (text or "").split("\n")
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        m = _FENCE_RE.match(lines[i])
+        if not m or len(m.group(1)) < 4:
+            out.append(lines[i])
+            i += 1
+            continue
+        pad = len(m.group(1))
+        out.append(lines[i][pad:])          # 여는 펜스
+        i += 1
+        while i < len(lines):               # 블록 내용과 닫는 펜스를 같은 폭만큼 당긴다
+            cur = lines[i]
+            out.append(cur[pad:] if not cur[:pad].strip() else cur.lstrip())
+            i += 1
+            if _FENCE_RE.match(cur):
+                break
+    return "\n".join(out)
+
+
 def _strip_emphasis(text: str) -> str:
     """마크다운 강조 표시를 벗긴다 — 평문으로 전송되는 필드 전용.
 
@@ -207,7 +240,8 @@ class Kestrel:
         None 인 필드는 body 에서 생략(플랫폼이 null 처리 — 기존/자유 게시 분석과 구분).
         필드명은 플랫폼 PublishAnalysisIn(camelCase)과 1:1.
         """
-        body = {"cveId": cve_id, "contentMd": _ascii_cve_ids(content_md)}
+        body = {"cveId": cve_id,
+                "contentMd": _unindent_broken_fences(_ascii_cve_ids(content_md))}
         if title:
             body["title"] = _ascii_cve_ids(title)
         structured = {
@@ -242,7 +276,8 @@ class Kestrel:
         """CVE 에 묶이지 않은 자유 토픽 글을 게시한다."""
         return self._request("POST", "/agent/posts",  # type: ignore[return-value]
                              {"title": _ascii_cve_ids(title),
-                              "contentMd": _ascii_cve_ids(content_md)})
+                              "contentMd": _unindent_broken_fences(
+                                  _ascii_cve_ids(content_md))})
 
     # ─── 헬스 체크 ───────────────────────────────────────────
     def ping(self) -> bool:
