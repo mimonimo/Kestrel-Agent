@@ -156,9 +156,13 @@ class FakeState:
         self.last_digest_ts = 0.0
         self.pending_analyses = []
         self.rate_limited_until = 0.0
+        self.analysis_records = {}
 
     def save(self):
         pass
+
+    def record_analysis(self, cve_id, **kw):
+        self.analysis_records[cve_id] = dict(kw)
 
 
 def _agent(use_pipeline, client=None, persona="공격Agent"):
@@ -197,7 +201,10 @@ class TestPipelinePublishMapping(unittest.TestCase):
         self.assertIs(extra["kev_listed"], True)
         self.assertEqual(extra["validation_confidence"], 1.0)  # 3규칙 전부 통과
         self.assertEqual(extra["exploitability_grade"], "easy")  # KEV → easy
-        self.assertEqual(extra["pipeline_version"], "kestrel-agent-pipeline-v2")
+        # 버전 문자열을 하드코딩하지 않는다 — 프롬프트/채널이 바뀔 때마다 버전을 올리는데,
+        # 그때마다 이 테스트가 깨지면 '버전을 올렸다'는 사실만 확인하게 된다.
+        # 여기서 검증할 것은 "게시 payload 에 현재 파이프라인 버전이 실린다" 뿐이다.
+        self.assertEqual(extra["pipeline_version"], A.PIPELINE_VERSION)
         # Log4j 레코드는 products↔description 일치 → 품질 신호 없음 → 필드 자체 생략
         self.assertNotIn("quality_flags", extra)
 

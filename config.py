@@ -56,6 +56,19 @@ class Config:
     follow_community: bool = False  # True 면 다른 에이전트가 이미 분석한 CVE 를 우선 선정.
     # 기본 선정은 '아무도 안 한 CVE 우선'이라 에이전트들이 흩어져 arm 간 짝비교가 안 쌓인다.
     # 대조군에만 켜서 처치군과 같은 CVE 집합을 분석하게 한다(짝비교 성립).
+    # ── 개정(revision) ───────────────────────────────────────────
+    # 분석을 1회성으로 끝내지 않고, 그 사이 쌓인 동료 분석·댓글을 반영해 다시 쓴다.
+    # 같은 에이전트·같은 CVE·같은 페르소나에서 '커뮤니티 입력'만 달라진 전후 쌍이 되므로
+    # 페르소나 교란이 원천적으로 없다(자연실험보다 통제가 강하다).
+    revision_enabled: bool = True
+    revision_every: int = 4       # N 사이클마다 1회를 개정에 배정(4 → 신규:개정 = 3:1).
+    # 왜 전량 개정이 아닌가: 개정 1건은 신규 1건과 같은 GPU 를 쓴다. 자연실험 쪽 표본도
+    # 계속 쌓여야 하므로 신규 생성률을 지키면서 개정 쌍을 모은다.
+    max_revisions: int = 2        # CVE 당 개정 횟수 상한.
+    # 왜 상한이 필요한가: 한 CVE 에 붙는 동료 관점은 최대 3개라 2차를 넘으면 새로 넣을 정보가
+    # 고갈된다. 그런데도 개정을 시키면 모델은 내용 없이 분량만 부풀려 지표를 속인다.
+    # 또한 같은 CVE 에서 상관된 쌍이 여러 개 나오면 부호검정의 표본 독립성 가정이 깨진다.
+    revision_min_age_sec: int = 1800   # 원판 게시 후 최소 경과(30분) — 동료 반응이 쌓일 시간.
     community_cadence: str = "balanced"  # analysis_only=False 일 때 커뮤니티 활동 강도.
     # "balanced"(기본): 분석 주력 + 답글은 항상 + 능동활동(댓글/토론)은 사이클당 1건만
     #   → 레이트리밋(에이전트당 시간당)·GPU 경합을 억제하며 분석 처리량 유지.
@@ -106,6 +119,11 @@ class Config:
             arm=os.environ.get("AGENT_ARM", "").strip(),
             follow_community=os.environ.get("AGENT_FOLLOW_COMMUNITY", "").strip().lower()
             in ("1", "true", "yes", "on"),
+            revision_enabled=os.environ.get("AGENT_REVISION", "true").strip().lower()
+            not in ("0", "false", "no"),
+            revision_every=int(os.environ.get("AGENT_REVISION_EVERY", "4") or 4),
+            max_revisions=int(os.environ.get("AGENT_MAX_REVISIONS", "2") or 2),
+            revision_min_age_sec=int(os.environ.get("AGENT_REVISION_MIN_AGE", "1800") or 1800),
         )
 
     def validate(self) -> None:

@@ -114,6 +114,9 @@ def _peer_reference(bb, ctx, own_key: str) -> tuple[str, list[dict]]:  # noqa: A
         rows = kestrel.analyses_for_cve(cve_id, scan=_PEER_SCAN)
     except Exception:  # noqa: BLE001 — 참고 조회 실패는 독립 분석으로 흡수(그레이스풀)
         return "", []
+    # 개정 트리거는 '원판 작성 시점 대비 늘어난 수'로 판정하므로, 프롬프트에 **쓴** 수가 아니라
+    # 그 시점에 **존재하던 총수**가 기준선이어야 한다(쓴 수는 _PEER_MAX 로 잘린다).
+    bb.report.meta["peer_total"] = len(rows or [])
 
     # 자기 페르소나 제외 + 인용할 내용(excerpt) 있는 것만, 페르소나 다양성 우선으로 소수 선택.
     picked: list[dict] = []
@@ -149,6 +152,8 @@ def _peer_reference(bb, ctx, own_key: str) -> tuple[str, list[dict]]:  # noqa: A
 
     block = (
         "\n[참고 — 다른 에이전트의 분석 (검증 대상이지 사실 아님)]\n"
+        "(요지는 플랫폼이 요약본만 제공하므로 짧습니다. 아래 [동료 토론]이 있으면 그쪽이 "
+        "더 구체적인 정보를 담고 있습니다.)\n"
         "아래는 같은 CVE 를 먼저 분석한 '다른 페르소나' 에이전트의 기존 분석 요지입니다. "
         "이는 다른 에이전트의 의견일 뿐 사실이 아니며 틀릴 수 있습니다. 위 [사실]과 대조해 "
         "스스로 검증하세요 — 참고의 수치·기법이 [사실]과 어긋나면 참고를 버리고 [사실]을 "
@@ -161,6 +166,80 @@ def _peer_reference(bb, ctx, own_key: str) -> tuple[str, list[dict]]:  # noqa: A
         + "\n[참고 끝 — 위는 검증 전 참고이며 확정 서술의 근거로 삼지 마세요]\n"
     )
     return block, picked
+
+
+_COMMENT_MAX = 6          # 프롬프트에 넣을 동료 댓글 최대 수
+_COMMENT_CHARS = 500      # 댓글 1건당 인용 상한(전문이 와도 프롬프트가 비대해지지 않게)
+
+
+def _comment_reference(bb, ctx) -> tuple[str, list[str]]:  # noqa: ANN001
+    """같은 CVE 에 달린 동료 댓글(전문)을 참고 블록으로 만든다.
+
+    왜 분석 요지가 아니라 댓글인가: 플랫폼의 분석 목록 API 는 `excerpt` 280자만 주고 본문을
+    주지 않아, '협업'으로 실제 전달되는 정보량이 사실상 요약 한 줄뿐이었다(실측: 협업 효과
+    전 지표 p>0.35 — 채널이 비어 있었다). 반면 댓글은 전문이 오고, 에이전트들이 서로의
+    판단을 반박·보강하는 실질 내용이 담긴다. 현재 유일하게 정보량이 있는 협업 채널이다.
+
+    대조군(peer_reference=False)은 여기서도 조회하지 않는다 — arm 정의를 유지한다.
+    """
+    kestrel = getattr(ctx, "kestrel", None) if ctx is not None else None
+    cve_id = getattr(bb, "cve_id", None)
+    if ctx is not None and not getattr(ctx, "peer_reference", True):
+        return "", []
+    if kestrel is None or not cve_id:
+        return "", []
+    try:
+        rows = kestrel.community_comments(cve_id)
+    except Exception:  # noqa: BLE001 — 조회 실패는 독립 분석으로 흡수
+        return "", []
+    bb.report.meta["comment_total"] = len(rows or [])  # 개정 트리거 판정의 기준선
+
+    texts, blocks = [], []
+    for c in (rows or [])[:_COMMENT_MAX]:
+        if not isinstance(c, dict):
+            continue
+        body = " ".join(str(c.get("content") or "").split())[:_COMMENT_CHARS]
+        if len(body) < 20:
+            continue
+        texts.append(body)
+        blocks.append(f"[{c.get('authorName') or '동료'}] {body}")
+    if not blocks:
+        return "", []
+
+    block = (
+        "\n[동료 토론 — 이 CVE 에 달린 다른 에이전트의 의견 (검증 대상이지 사실 아님)]\n"
+        "동료들이 이 취약점을 두고 실제로 주고받은 지적입니다. 반박·이견이 섞여 있으며 "
+        "틀린 주장도 있을 수 있습니다. [사실]과 대조해 스스로 판단하되, **당신이 놓쳤거나 "
+        "과소평가한 지점이 지적됐다면 본문에 반영하고**, 동의하지 않으면 왜 동의하지 않는지 "
+        "당신 관점으로 반박하세요. 그대로 인용하지 말고 재료로만 쓰세요.\n"
+        + "\n".join(blocks)
+        + "\n[동료 토론 끝]\n"
+    )
+    return block, texts
+
+
+def _revision_block(ctx) -> str:  # noqa: ANN001
+    """개정 실행일 때 '이전 판'을 프롬프트에 싣고 개정 지침을 준다.
+
+    핵심 지침은 '길게 늘리지 말 것'이다. 분량을 늘리라고 하면 모델은 새 정보가 없어도
+    문장을 부풀려 분량 지표만 올린다 — 그러면 개정 효과 측정이 통째로 무효가 된다.
+    """
+    prior = (getattr(ctx, "prior_body", "") or "").strip()
+    if not prior:
+        return ""
+    idx = getattr(ctx, "revision_index", 0) or 1
+    return (
+        f"\n[개정 대상 — 당신이 이전에 쓴 분석 (제{idx}차 개정)]\n"
+        "아래는 **당신 자신이 앞서 작성한** 같은 CVE 분석입니다. 이번에는 새로 쓰는 것이 "
+        "아니라 이것을 개정합니다. 그동안 올라온 위 [참고]·[동료 토론]의 새 정보를 반영해 "
+        "다음을 하세요:\n"
+        "  1) 틀렸거나 근거가 약했던 판단을 바로잡는다(무엇을 왜 바꿨는지 본문에 드러낸다).\n"
+        "  2) 동료가 짚었는데 내가 빠뜨린 지점을 채운다.\n"
+        "  3) 새 정보가 없는 부분은 **그대로 두거나 오히려 줄인다** — 분량을 늘리는 것이 "
+        "목적이 아니다. 새로 넣을 근거가 없으면 늘리지 마세요.\n"
+        f"{prior[:6000]}\n"
+        "[개정 대상 끝]\n"
+    )
 
 
 # 섹션별 지침 — (헤더, 깊게 쓸 때, 짧게 쓸 때).
@@ -295,17 +374,25 @@ def report(bb, ctx) -> None:  # noqa: ANN001
     # 실패·없음이면 빈 문자열 → 기존과 동일한 독립 분석(그레이스풀).
     peer_block, picked = _peer_reference(bb, ctx, persona.key)
     peer_used = len(picked)
+    # 동료 댓글(전문) — 분석 excerpt(280자)보다 정보량이 큰 유일한 협업 채널.
+    comment_block, comment_texts = _comment_reference(bb, ctx)
+    # 개정 실행이면 이전 판을 함께 싣는다(신규 분석이면 빈 문자열).
+    revision_block = _revision_block(ctx)
     # 실험 계측용 보존 — 협업(peer) 노출량과 그 원문은 플랫폼 이점 분석의 독립변수다.
     bb.report.peer_personas = [_peer_key(a) for a in picked]
     bb.report.peer_excerpts = [(a.get("excerpt") or "") for a in picked]
+    bb.report.peer_comments = comment_texts
     bb.report.facts = _facts(bb)
-    system, user = _prompt(bb, persona, report_lang, peer_block)
+    system, user = _prompt(bb, persona, report_lang,
+                           peer_block + comment_block + revision_block)
 
     started = time.time()
     try:
         raw = client.complete(system, user, max_tokens=_MAX_TOKENS, effort="medium", model=model)
     except Exception as e:  # noqa: BLE001 — llm.LLMError 포함. 로컬 실패는 재시도 대상.
-        bb.report.meta = {"model": used_model, "persona": persona.key,
+        # 참고 조회에서 채워둔 총수(peer_total/comment_total)를 잃지 않도록 병합한다.
+        bb.report.meta = {**bb.report.meta,
+                          "model": used_model, "persona": persona.key,
                           "elapsed_sec": round(time.time() - started, 2),
                           "peer_ref_used": peer_used, "error": str(e)}
         bb.needs_retry = True
@@ -338,9 +425,12 @@ def report(bb, ctx) -> None:  # noqa: ANN001
     bb.report.lang = ("en" if str(report_lang).startswith("en") else "ko") + \
                      ("+en" if p["summary_en"] else "")
     bb.report.meta = {
+        **bb.report.meta,          # peer_total/comment_total 보존
         "model": used_model,
         "persona": persona.key,
         "elapsed_sec": round(time.time() - started, 2),
         "peer_ref_used": peer_used,
+        "comment_ref_used": len(comment_texts),
+        "revision_index": getattr(ctx, "revision_index", 0) if ctx is not None else 0,
         "unparsed": not p["mitigation"] and not p["summary_en"],
     }

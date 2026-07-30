@@ -142,11 +142,48 @@ def novelty(text: str, peer_texts: list[str]) -> dict:
     }
 
 
+def adoption(text: str, prior_text: str, peer_texts: list[str]) -> dict:
+    """개정판이 **동료 고유 정보를 실제로 흡수했는가** — 협업 효과의 직접 측정.
+
+    왜 이 지표가 필요한가: 분량·구체성 같은 간접 프록시로는 협업 효과가 잡히지 않았다
+    (실측: 페르소나 보정 후 전 지표 p>0.35). 프록시는 '좋아졌는가'를 재려다 실패했지만,
+    개정 설계에서는 더 직접적인 질문을 던질 수 있다 — **동료가 말했고 내가 원래 몰랐던 것이
+    개정판에 들어왔는가.** 이건 프록시가 아니라 정보 전달 자체의 측정이다.
+
+      adopted_ratio    = (개정판에 새로 등장 ∩ 동료 고유) / 동료 고유
+                         동료만 알던 정보 중 몇 %를 받아들였나.
+      self_added_ratio = (개정판에 새로 등장 − 동료 전체) / 개정판에 새로 등장
+                         새로 쓴 것 중 동료에게도 없던 순수 자체 기여 — '복붙 반증'.
+
+    peer_texts 가 비면 adopted_ratio 는 None(측정 불가)이다. 대조군은 구조적으로 여기에
+    해당하므로 0 이 아니라 None 이 되고, 이 구분이 위약 대조의 근거가 된다.
+    """
+    mine, prior = _tokens(text), _tokens(prior_text)
+    added = mine - prior                       # 개정에서 새로 등장한 토큰
+    peers: set[str] = set()
+    for p in peer_texts or []:
+        peers |= _tokens(p)
+    peer_only = peers - prior                  # 원래 내 글엔 없고 동료에게만 있던 정보
+    out = {
+        "added_tokens": len(added),
+        "peer_only_tokens": len(peer_only),
+        "adopted_tokens": len(added & peer_only),
+        "adopted_ratio": None,
+        "self_added_ratio": None,
+    }
+    if peer_only:
+        out["adopted_ratio"] = round(len(added & peer_only) / len(peer_only), 4)
+    if added:
+        out["self_added_ratio"] = round(len(added - peers) / len(added), 4)
+    return out
+
+
 # ── 통합 산출 ────────────────────────────────────────────────
 def report_metrics(sections: dict[str, str], *, facts: str, target_cve: str | None,
                    epss: float | None, priority_action: str | None,
                    validation_confidence: float | None,
-                   peer_texts: list[str] | None = None) -> dict:
+                   peer_texts: list[str] | None = None,
+                   prior_body: str | None = None) -> dict:
     """리포트 1건의 전체 지표. verification 과 analytics 가 같은 함수를 쓴다(정의 불일치 방지)."""
     body = "\n".join((sections.get(k) or "") for k in _SECTIONS)
     out: dict = {}
@@ -155,6 +192,8 @@ def report_metrics(sections: dict[str, str], *, facts: str, target_cve: str | No
     out.update(evidence_citation(body, epss=epss, priority_action=priority_action,
                                  validation_confidence=validation_confidence))
     out.update(novelty(body, peer_texts or []))
+    if prior_body:  # 개정 실행일 때만 — 신규 분석에는 '이전 판'이 없다.
+        out.update(adoption(body, prior_body, peer_texts or []))
     ungrounded = ungrounded_cves(body, facts, target_cve)
     out["ungrounded_cves"] = ungrounded
     out["ungrounded_cve_count"] = len(ungrounded)

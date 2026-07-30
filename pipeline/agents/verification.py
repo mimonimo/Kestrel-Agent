@@ -24,8 +24,12 @@ _MAX_REPAIR_TOKENS = 1400   # 수리는 문제 섹션만 다시 받으므로 본
 _REPAIR_TEMP_EFFORT = "low"  # 수리는 창의성이 아니라 준수 — 저온도
 
 
-def _compute(bb) -> dict:  # noqa: ANN001
-    """리포트 지표 산출. report/exploitability/validation 값을 근거로 넘긴다."""
+def _compute(bb, ctx=None) -> dict:  # noqa: ANN001
+    """리포트 지표 산출. report/exploitability/validation 값을 근거로 넘긴다.
+
+    peer_texts 는 분석 요지(excerpt) + 동료 댓글 전문을 함께 쓴다 — 신규성·흡수율이
+    '동료가 실제로 말한 것' 전체를 기준으로 계산되도록.
+    """
     return metrics.report_metrics(
         bb.report.sections(),
         facts=bb.report.facts,
@@ -33,7 +37,8 @@ def _compute(bb) -> dict:  # noqa: ANN001
         epss=bb.exploitability.epss,
         priority_action=bb.priority.action,
         validation_confidence=bb.validation.confidence,
-        peer_texts=bb.report.peer_excerpts,
+        peer_texts=bb.report.peer_texts(),
+        prior_body=getattr(ctx, "prior_body", "") if ctx is not None else "",
     )
 
 
@@ -73,10 +78,10 @@ def verification(bb, ctx) -> None:  # noqa: ANN001
     if not (bb.report.attack or bb.report.mitigation or bb.report.detection):
         return
     if ctx is not None and not getattr(ctx, "verify_report", True):
-        bb.verification.metrics = _compute(bb)  # 지표는 남기되 게이트는 미적용(ablation)
+        bb.verification.metrics = _compute(bb, ctx)  # 지표는 남기되 게이트는 미적용(ablation)
         return
 
-    m = _compute(bb)
+    m = _compute(bb, ctx)
     checks, failures = _evaluate(m)
 
     client = getattr(ctx, "llm", None) if ctx is not None else None
@@ -104,7 +109,7 @@ def verification(bb, ctx) -> None:  # noqa: ANN001
                 bb.report.mitigation = p["mitigation"] or bb.report.mitigation
                 bb.report.summary_en = bb.report.summary_en or p["summary_en"]
                 bb.verification.repaired = True
-                m = _compute(bb)               # 수리 후 지표로 갱신
+                m = _compute(bb, ctx)               # 수리 후 지표로 갱신
                 checks, failures = _evaluate(m)
         except Exception as e:  # noqa: BLE001 — 수리 실패는 원본 유지(게시는 계속)
             bb.verification.repair_error = str(e)

@@ -6,9 +6,12 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from pathlib import Path
 
 _BASE = Path(__file__).resolve().parent
+_MAX_RECORDS = 60         # 개정 후보로 유지할 CVE 수(최신순) — state 파일 비대화 방지
+_MAX_RECORD_BODY = 8000   # 기록할 본문 상한(자). 개정 프롬프트에 싣는 양보다 넉넉히
 
 
 def _slug(name: str) -> str:
@@ -31,6 +34,11 @@ class State:
         # 사이클에 재게시한다. 각 항목: {cveId, body, meta, sev}.
         self.pending_analyses: list[dict] = []
         self.rate_limited_until: float = 0.0  # 이 시각(epoch) 전에는 게시 재시도 보류
+        # 내가 게시한 분석의 CVE별 기록 — 개정(revision) 대상 선정과 전후 비교의 근거.
+        # cveId → {analysis_id, ts, peer_at_write, comment_at_write, revisions, body}
+        # analyzed_cves(중복 방지용 집합)와 별개로 둔다: 저 집합은 '했다/안 했다'만 알고,
+        # 개정하려면 '무엇을 썼는지·그때 동료 정보가 얼마였는지'가 필요하다.
+        self.analysis_records: dict[str, dict] = {}
         self._load()
 
     def _load(self) -> None:
@@ -50,6 +58,9 @@ class State:
             self.memory = list(d.get("memory", []))[-20:]
             self.pending_analyses = list(d.get("pending_analyses", []))
             self.rate_limited_until = float(d.get("rate_limited_until", 0.0))
+            self.analysis_records = {str(k): dict(v) for k, v
+                                     in (d.get("analysis_records") or {}).items()
+                                     if isinstance(v, dict)}
         except Exception:  # noqa: BLE001
             pass  # 손상 시 빈 상태로 시작
 
@@ -66,9 +77,37 @@ class State:
                     "memory": self.memory[-20:],
                     "pending_analyses": self.pending_analyses,
                     "rate_limited_until": self.rate_limited_until,
+                    "analysis_records": self.analysis_records,
                 },
                 ensure_ascii=False,
                 indent=2,
             ),
             encoding="utf-8",
         )
+
+    # ── 개정 대상 기록 ────────────────────────────────────────
+    def record_analysis(self, cve_id: str, *, analysis_id: str | None, body: str,
+                        peer_at_write: int, comment_at_write: int,
+                        revision_index: int = 0) -> None:
+        """게시한 분석을 CVE 단위로 기록(같은 CVE 재게시는 덮어쓴다 = 항상 최신판이 개정 대상).
+
+        본문을 통째로 들고 있는 이유: 개정판의 '흡수율'을 재려면 이전 판 원문이 필요하다.
+        state 파일 비대화를 막기 위해 _MAX_RECORDS 개만 최신순으로 유지한다.
+        """
+        prev = self.analysis_records.get(cve_id) or {}
+        self.analysis_records[cve_id] = {
+            "analysis_id": analysis_id,
+            "ts": time.time(),
+            "peer_at_write": int(peer_at_write),
+            "comment_at_write": int(comment_at_write),
+            "revisions": int(revision_index or prev.get("revisions", 0)),
+            "body": body[:_MAX_RECORD_BODY],
+        }
+        self._trim_records()
+
+    def _trim_records(self) -> None:
+        if len(self.analysis_records) <= _MAX_RECORDS:
+            return
+        ordered = sorted(self.analysis_records.items(),
+                         key=lambda kv: kv[1].get("ts", 0.0), reverse=True)
+        self.analysis_records = dict(ordered[:_MAX_RECORDS])

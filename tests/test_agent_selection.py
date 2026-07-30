@@ -22,7 +22,9 @@ class FakeState:
         self.commented_authors = {}
         self.memory = []
         self.last_topic_ts = 0.0
+        self.analysis_records = {}
     def save(self): pass
+    def record_analysis(self, cve_id, **kw): self.analysis_records[cve_id] = dict(kw)
 
 
 def _agent(persona="공격Agent", max_persp=3):

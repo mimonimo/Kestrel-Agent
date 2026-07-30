@@ -111,6 +111,9 @@ def build_configs(path: Path, base: Config, log=print) -> list[Config]:
                 analysis_only=bool(_pick("analysisOnly", base.analysis_only)),
                 community_cadence=str(_pick("communityCadence", base.community_cadence)),
                 follow_community=bool(_pick("followCommunity", base.follow_community)),
+                revision_enabled=bool(_pick("revisionEnabled", base.revision_enabled)),
+                revision_every=int(_pick("revisionEvery", base.revision_every)),
+                max_revisions=int(_pick("maxRevisions", base.max_revisions)),
             )
         )
     return configs

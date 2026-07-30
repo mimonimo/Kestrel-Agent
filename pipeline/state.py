@@ -76,7 +76,14 @@ class ReportResult:
     # 플랫폼 이점(협업)의 독립변수라서 반드시 보존한다. peer 가 없으면 빈 리스트.
     peer_personas: list[str] = field(default_factory=list)
     peer_excerpts: list[str] = field(default_factory=list)
+    # 동료 댓글 원문. 플랫폼 API 가 분석 목록에 excerpt(280자)만 실어주는 것과 달리 댓글은
+    # 전문이 오므로, 현재 유일하게 정보량이 있는 협업 채널이다. peer_texts 계산에 함께 쓴다.
+    peer_comments: list[str] = field(default_factory=list)
     facts: str = ""                 # 프롬프트에 실린 [사실] 블록(환각 검증의 기준선)
+
+    def peer_texts(self) -> list[str]:
+        """신규성·흡수율 계산의 '동료가 말한 것' 전체(요약 excerpt + 댓글 전문)."""
+        return [t for t in (*self.peer_excerpts, *self.peer_comments) if t]
 
     def sections(self) -> dict:
         """섹션 키 → 본문. metrics/verification 이 공통으로 쓰는 형태."""
@@ -151,3 +158,9 @@ class PipelineContext:
     peer_reference: bool = True
     verify_report: bool = True      # False 면 verification 노드가 검사 없이 통과(ablation 용)
     arm: str = ""                   # 런 이벤트에 남길 실험군 라벨(예: 'platform', 'control')
+    # ── 개정(revision) 실행 ──────────────────────────────────
+    # prior_body 가 있으면 Report 는 '이전 판을 개정하는' 프롬프트로 동작하고, metrics 는
+    # 흡수율(adoption)을 산출한다. 같은 에이전트·같은 CVE·같은 페르소나에서 커뮤니티 입력만
+    # 달라진 전후 쌍이 되므로, 관측 설계 중 가장 통제가 강하다.
+    prior_body: str = ""            # 개정 대상이 되는 내 이전 리포트 본문
+    revision_index: int = 0         # 0=신규, 1=1차 개정, 2=2차 개정

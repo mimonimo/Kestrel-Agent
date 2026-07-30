@@ -80,9 +80,13 @@ class FakeState:
         self.last_digest_ts = 0.0
         self.pending_analyses = []
         self.rate_limited_until = 0.0
+        self.analysis_records = {}
 
     def save(self):
         pass
+
+    def record_analysis(self, cve_id, **kw):
+        self.analysis_records[cve_id] = dict(kw)
 
 
 def _cfg(use_pipeline, persona="공격Agent"):

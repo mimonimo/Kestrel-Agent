@@ -51,7 +51,11 @@ _BUILD_RETRY_WAIT = 30   # 재시도 간 대기(초)
 # 생성했는지 추적한다. 파이프라인 산출 스키마가 바뀌면 올린다.
 # v2: 페르소나별 섹션 깊이 분화(focus) + 번호 스캐폴드 복창 방지. v1 과 생성물이
 # 달라지므로 런 이벤트에서 반드시 구분돼야 한다(같은 arm 이라도 별개 조건).
-PIPELINE_VERSION = "kestrel-agent-pipeline-v2"
+# v3: 동료 댓글(전문)을 참고 채널에 편입 + 개정(revision) 실행 도입.
+#     플랫폼 분석 목록 API 는 excerpt 280자만 주므로 v2 까지의 '협업'은 사실상 요약 한 줄만
+#     전달했다(실측: 페르소나 보정 후 협업 효과 전 지표 p>0.35 — 채널이 비어 있었다).
+#     댓글은 전문이 오므로 v3 부터 협업 채널의 실제 정보량이 달라진다 → 버전 분리 필수.
+PIPELINE_VERSION = "kestrel-agent-pipeline-v3"
 
 
 def _log(tag: str, msg: str) -> None:
@@ -69,6 +73,8 @@ class Agent:
         # 파이프라인이 만든 런 이벤트를 게시 결과가 정해질 때까지 잠시 보관한다.
         # (생성 시점엔 outcome 을 모르고, 게시 시점엔 blackboard 가 없으므로.)
         self._run_event: dict | None = None
+        self._cycle_n = 0            # 개정 배정(revision_every)용 사이클 카운터
+        self._revision: dict | None = None  # 이번 실행이 개정이면 그 맥락(런 이벤트에 병합)
 
     def log(self, msg: str) -> None:
         _log(self.tag, msg)
@@ -239,8 +245,98 @@ class Agent:
             return
         self._publish_analysis(cid, body, meta, detail.get("severity"))
 
+    # ── 개정(revision) — 커뮤니티 입력으로 기존 분석을 다시 쓴다 ────────
+    def _new_info_since(self, cve_id: str, rec: dict) -> tuple[int, int]:
+        """원판 작성 이후 늘어난 (동료 분석 수, 댓글 수). 조회 실패는 (0, 0)."""
+        peers = comments = 0
+        try:
+            rows = self.k.analyses_for_cve(cve_id, scan=60)
+            peers = sum(1 for a in rows or []
+                        if not self._is_self(a.get("authorName"), a.get("authorPersona")))
+        except KestrelError:
+            pass
+        try:
+            comments = len(self.k.community_comments(cve_id) or [])
+        except KestrelError:
+            pass
+        return (max(0, peers - int(rec.get("peer_at_write", 0))),
+                max(0, comments - int(rec.get("comment_at_write", 0))))
+
+    def _pick_revision(self) -> tuple[dict | None, dict | None]:
+        """개정 대상 (CVE 상세, 상태 레코드). 없으면 (None, None).
+
+        고르는 기준은 '새 정보가 실제로 늘어난 것 중 가장 많이 늘어난 것'이다. 새 정보가
+        없는데 개정하면 모델은 내용 없이 분량만 부풀리고, 그 분량 증가가 '개정 효과'로
+        오독된다 — 측정을 스스로 오염시키는 가장 흔한 실패다.
+        """
+        now = time.time()
+        cands = []
+        for cve_id, rec in self.state.analysis_records.items():
+            if int(rec.get("revisions", 0)) >= self.cfg.max_revisions:
+                continue
+            if now - float(rec.get("ts", 0.0)) < self.cfg.revision_min_age_sec:
+                continue
+            if not (rec.get("body") or "").strip():
+                continue
+            cands.append((cve_id, rec))
+        if not cands:
+            return None, None
+        # 최신 것부터 확인해 API 호출을 아낀다(오래된 CVE 는 이미 반응이 멎었을 가능성).
+        cands.sort(key=lambda kv: kv[1].get("ts", 0.0), reverse=True)
+        best = None
+        for cve_id, rec in cands[:8]:
+            new_peers, new_comments = self._new_info_since(cve_id, rec)
+            if new_peers + new_comments <= 0:
+                continue
+            score = new_comments * 2 + new_peers  # 댓글이 전문이라 정보량이 크다 → 가중
+            if best is None or score > best[0]:
+                best = (score, cve_id, rec, new_peers, new_comments)
+        if best is None:
+            return None, None
+        _score, cve_id, rec, new_peers, new_comments = best
+        try:
+            detail = self.k.get_cve(cve_id)
+        except KestrelError:
+            return None, None
+        rec = dict(rec, _new_peers=new_peers, _new_comments=new_comments, _cve=cve_id)
+        return detail, rec
+
+    def do_revision(self) -> bool:
+        """개정 1건 수행. 대상이 없거나 조건 미충족이면 False(호출부가 신규 분석으로 되돌아간다)."""
+        if not self.cfg.revision_enabled:
+            return False
+        if time.time() < self.state.rate_limited_until:
+            return False
+        detail, rec = self._pick_revision()
+        if detail is None or rec is None:
+            return False
+        cid = rec["_cve"]
+        idx = int(rec.get("revisions", 0)) + 1
+        self.log(f"· 개정 {idx}차: {cid} (새 동료분석 {rec['_new_peers']}건, "
+                 f"새 댓글 {rec['_new_comments']}건)")
+        self._revision = {
+            "revision_index": idx,
+            "revision_of": rec.get("analysis_id"),
+            "new_peers": rec["_new_peers"],
+            "new_comments": rec["_new_comments"],
+            "prior_chars": len(rec.get("body") or ""),
+        }
+        try:
+            body, meta = self._analysis_via_pipeline(
+                detail, prior_body=rec.get("body") or "", revision_index=idx)
+            if len(body.strip()) < 20:
+                self.log(f"  개정 본문이 너무 짧아 건너뜀: {cid}")
+                self._finalize_run_event("skipped_short")
+                return True  # 시도했으므로 이번 사이클은 개정 차례를 소진한다
+            self._publish_analysis(cid, body, meta, detail.get("severity"),
+                                   revision_index=idx)
+        finally:
+            self._revision = None
+        return True
+
     # ── 게시(429 안전장치: 결과 큐 보관 + Retry-After 존중 재시도) ──────
-    def _publish_analysis(self, cid: str, body: str, meta: dict, sev: str | None) -> bool:
+    def _publish_analysis(self, cid: str, body: str, meta: dict, sev: str | None,
+                          *, revision_index: int = 0) -> bool:
         """분석을 게시. 성공 시 상태 갱신 후 True. 429 면 결과를 큐에 보관하고 False
         (파이프라인 생성 결과를 버리지 않음 — 다음 사이클 _flush_pending 이 재게시)."""
         try:
@@ -254,7 +350,7 @@ class Agent:
             # 표본은 이미 '생성'됐다(품질 분석 대상). 게시만 지연된 상태로 기록한다.
             self._finalize_run_event("queued_429")
             return False
-        self._record_published(cid, body, sev, out)
+        self._record_published(cid, body, sev, out, revision_index=revision_index)
         return True
 
     def _enqueue_pending(self, cid: str, body: str, meta: dict, sev: str | None) -> None:
@@ -266,10 +362,19 @@ class Agent:
             dropped = q.pop(0)
             self.log(f"  ⚠️ 큐 상한({_MAX_PENDING}) 초과 — 폐기: {dropped.get('cveId')}")
 
-    def _record_published(self, cid: str, body: str, sev: str | None, out: dict) -> None:
+    def _record_published(self, cid: str, body: str, sev: str | None, out: dict,
+                          *, revision_index: int = 0) -> None:
         # 큐에서 재게시된 건은 이미 queued_429 로 기록돼 있어 여기서 조용히 무시된다.
+        ev = self._run_event or {}
+        peer_total = int(ev.get("peer_total") or 0)
+        comment_total = int(ev.get("comment_total") or 0)
         self._finalize_run_event("published", out.get("id"))
         self.state.analyzed_cves.add(cid)
+        # 개정 대상 기록 — 다음 개정이 '이 판'을 원본으로 삼는다.
+        self.state.record_analysis(cid, analysis_id=out.get("id"), body=body,
+                                   peer_at_write=peer_total,
+                                   comment_at_write=comment_total,
+                                   revision_index=revision_index)
         # 핵심 요지를 메모리에 남겨 다음 분석이 이어받게 한다.
         self.state.memory.append(f"{cid}({sev or '?'}): {self._key_points(body)}")
         self.state.memory = self.state.memory[-20:]
@@ -313,7 +418,8 @@ class Agent:
             return self.brain.analyze_cve(detail, context=context, memory=mem_ctx), {}
         return self._analysis_via_pipeline(detail)
 
-    def _analysis_via_pipeline(self, detail: dict) -> tuple[str, dict]:
+    def _analysis_via_pipeline(self, detail: dict, *, prior_body: str = "",
+                               revision_index: int = 0) -> tuple[str, dict]:
         from pipeline.state import Blackboard, PipelineContext  # noqa: PLC0415
         from pipeline.supervisor import run_pipeline  # noqa: PLC0415
 
@@ -328,7 +434,9 @@ class Agent:
                               model=(self.cfg.analysis_model or None),
                               peer_reference=self.cfg.peer_reference,
                               verify_report=self.cfg.verify_report,
-                              arm=self.cfg.arm)
+                              arm=self.cfg.arm,
+                              prior_body=prior_body,
+                              revision_index=revision_index)
         try:
             run_pipeline(bb, ctx)
         except Exception as e:  # noqa: BLE001 — 한 CVE 실패가 봇 루프를 멈추지 않게
@@ -354,6 +462,8 @@ class Agent:
             return  # brain 경로(USE_PIPELINE=false)거나 이미 기록됨
         ev["outcome"] = outcome
         ev["analysis_id"] = analysis_id
+        if self._revision:  # 개정 실행이면 전후 짝을 되짚을 수 있게 맥락을 함께 남긴다
+            ev["revision"] = dict(self._revision)
         analytics.append(ev)
 
     @staticmethod
@@ -609,9 +719,18 @@ class Agent:
     # ── 한 사이클 ─────────────────────────────────────────────
     def cycle(self) -> None:
         community = self.k.community_analyses(limit=15)
+        self._cycle_n += 1
         try:
             self._flush_pending()  # 지난 사이클 429 로 밀린 분석 먼저 재게시
-            self.do_analysis(community)
+            # revision_every 사이클마다 1회는 개정에 배정(기본 4 → 신규:개정 = 3:1).
+            # 개정 대상이 없으면 do_revision 이 False 를 돌려 그대로 신규 분석으로 넘어간다
+            # (개정 때문에 표본 생성이 멈추는 일이 없게).
+            did_revision = False
+            if (self.cfg.revision_enabled and self.cfg.revision_every > 0
+                    and self._cycle_n % self.cfg.revision_every == 0):
+                did_revision = self.do_revision()
+            if not did_revision:
+                self.do_analysis(community)
             if not getattr(self.cfg, "analysis_only", False):
                 # 우리 글에 온 반응(답글)은 대화 지속을 위해 항상 처리.
                 self.do_replies()

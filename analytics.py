@@ -67,6 +67,13 @@ def build_run_event(bb, *, agent_tag: str, cfg, pipeline_version: str,
         # ── 협업 노출량(플랫폼 이점의 독립변수) ──────────────
         "peer_ref_used": len(rep.peer_personas),
         "peer_personas": list(rep.peer_personas),
+        # 댓글은 플랫폼이 전문을 주는 유일한 협업 채널이라 excerpt 와 정보량이 다르다.
+        # 별도 변수로 남겨 '무엇이 효과를 냈는지'를 사후에 분리할 수 있게 한다.
+        "comment_ref_used": (rep.meta or {}).get("comment_ref_used", 0),
+        # 총수(사용 수와 다름) — 개정 트리거가 '작성 시점 대비 증가'를 판정하는 기준선.
+        "peer_total": (rep.meta or {}).get("peer_total", 0),
+        "comment_total": (rep.meta or {}).get("comment_total", 0),
+        "revision_index": (rep.meta or {}).get("revision_index", 0),
         # ── 대상 CVE 특성(난이도 통제 변수) ──────────────────
         "cve": bb.cve_id,
         "cve_severity": rec.get("severity"),
