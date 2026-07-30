@@ -14,7 +14,11 @@ import re
 
 from config import Config
 
-_CVE_RE = re.compile(r"CVE-\d{4}-\d{4,7}", re.IGNORECASE)  # feeds.py 와 동일(실제 CVE 형식)
+# 하이픈은 ASCII 외에 식자용(U+2011 등)도 받는다 — 모델이 CVE 번호를 그렇게 쓰는 일이
+# 잦아서, 좁은 패턴은 실제로 언급된 CVE 를 못 본다. feeds.py·pipeline/metrics.py 와 동일.
+_DASHES = "-‐‑‒–—―−﹣－"
+_CVE_RE = re.compile(rf"CVE[{_DASHES}]\d{{4}}[{_DASHES}]\d{{4,7}}", re.IGNORECASE)
+_DASH_RE = re.compile(f"[{_DASHES}]")
 _MAX_CALLS = 5  # 한 생성 작업의 총 모델 호출 상한(견고성+품질 재시도 합산)
 
 # 댓글·답글 공통 규칙(소형 모델의 정체성 혼란·머리말·코드블록 남용 교정).
@@ -33,7 +37,7 @@ _COMMENT_RULES = (
 
 
 def _find_cves(text: str) -> set[str]:
-    return {m.upper() for m in _CVE_RE.findall(text or "")}
+    return {_DASH_RE.sub("-", m).upper() for m in _CVE_RE.findall(text or "")}
 
 
 def _has_sections(text: str, required: list[str]) -> bool:

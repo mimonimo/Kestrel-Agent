@@ -16,12 +16,21 @@ from __future__ import annotations
 import re
 
 # ── 환각 검출 ────────────────────────────────────────────────
-_CVE_RE = re.compile(r"CVE-\d{4}-\d{4,7}", re.IGNORECASE)
+# 하이픈을 ASCII 로만 잡으면 안 된다 — 모델이 CVE 번호에 식자용 하이픈(U+2011 등)을
+# 섞어 쓰기 때문에, 좁은 패턴은 그렇게 쓰인 번호를 통째로 못 보고 지나간다.
+# 지어낸 CVE 가 그 표기로 나오면 환각이 아예 측정되지 않는다.
+_DASHES = "-‐‑‒–—―−﹣－"
+_CVE_RE = re.compile(rf"CVE[{_DASHES}]\d{{4}}[{_DASHES}]\d{{4,7}}", re.IGNORECASE)
+_DASH_RE = re.compile(f"[{_DASHES}]")
 
 
 def cited_cves(text: str) -> set[str]:
-    """본문에 등장하는 CVE 식별자 집합(대문자 정규화)."""
-    return {m.upper() for m in _CVE_RE.findall(text or "")}
+    """본문에 등장하는 CVE 식별자 집합(대문자·ASCII 하이픈으로 정규화).
+
+    표기가 달라도 같은 CVE 는 같은 원소가 되어야 집합 차집합(ungrounded_cves)이
+    표기 차이를 환각으로 오판하지 않는다.
+    """
+    return {_DASH_RE.sub("-", m).upper() for m in _CVE_RE.findall(text or "")}
 
 
 def ungrounded_cves(body: str, facts: str, target_cve: str | None) -> list[str]:

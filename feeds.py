@@ -25,7 +25,11 @@ DEFAULT_FEEDS = [
     "https://www.tenable.com/blog/feed",                 # Tenable 리서치
 ]
 
-_CVE_RE = re.compile(r"CVE-\d{4}-\d{4,7}", re.IGNORECASE)
+# 기사 제목이 식자용 하이픈(U+2011 등)을 쓰는 경우가 있어 넓게 잡고, 추출한 식별자는
+# ASCII 로 되돌린다 — 그대로 두면 그 문자열로 API 를 조회했을 때 매칭되지 않는다.
+_DASHES = "-‐‑‒–—―−﹣－"
+_CVE_RE = re.compile(rf"CVE[{_DASHES}]\d{{4}}[{_DASHES}]\d{{4,7}}", re.IGNORECASE)
+_DASH_RE = re.compile(f"[{_DASHES}]")
 _UA = "Mozilla/5.0 (KestrelAgent feed reader)"
 
 
@@ -92,7 +96,7 @@ def collect_cve_articles(feeds: list[str], log=lambda *_: None) -> dict[str, Art
             continue
         for title, link, summary in items:
             for m in _CVE_RE.findall(f"{title} {summary}"):
-                cid = m.upper()
+                cid = _DASH_RE.sub("-", m).upper()
                 if cid not in found:  # 먼저 등장한(=대개 더 최신) 기사 우선
                     found[cid] = Article(
                         cve_id=cid, title=title.strip(), link=link.strip(),

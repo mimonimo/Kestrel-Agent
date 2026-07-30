@@ -53,6 +53,22 @@ class TestMetrics(unittest.TestCase):
         body = "CVE-2025-38322 은 NULL 역참조입니다."
         self.assertEqual(metrics.ungrounded_cves(body, _FACTS, "CVE-2025-38322"), [])
 
+    def test_typographic_hyphen_cve_is_detected(self):
+        """식자용 하이픈(U+2011)으로 쓴 CVE 도 환각으로 잡힌다.
+
+        모델이 ASCII 하이픈 대신 U+2011 을 섞어 쓰는데, 좁은 패턴은 이 표기를 통째로
+        놓쳐 지어낸 CVE 가 측정되지 않은 채 통과했다.
+        """
+        body = "이 결함은 CVE‑2019‑11477 로 이어집니다."
+        self.assertEqual(metrics.ungrounded_cves(body, _FACTS, "CVE-2025-38322"),
+                         ["CVE-2019-11477"])
+
+    def test_typographic_hyphen_is_normalised_before_comparison(self):
+        """표기만 다른 같은 CVE 를 환각으로 오판하지 않는다."""
+        body = "CVE‑2025‑38322 은 NULL 역참조입니다."
+        self.assertEqual(metrics.ungrounded_cves(body, _FACTS, "CVE-2025-38322"), [])
+        self.assertEqual(metrics.cited_cves(body), {"CVE-2025-38322"})
+
     def test_section_completeness_flags_thin_sections(self):
         out = metrics.section_completeness(
             {"attack": "가" * 200, "impact": "짧음", "chaining": "", "detection": "나" * 200,
