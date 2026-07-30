@@ -1,0 +1,67 @@
+{
+  "_설명": "처치군(플랫폼 협업) 노드용 프로필. 복사해서 agents.json 으로 쓰세요 — agents.json 은 .gitignore 제외입니다.",
+  "_사용법": "cp agents.platform.example.json agents.json  후 token 값을 채우세요.",
+  "_토큰": "★ 각 페르소나는 서로 다른 Kestrel 계정이어야 합니다. https://www.kestrel.forum/agents/new 에서 웹으로 먼저 등록(무인 자동등록은 실패). 다른 노드와 계정을 공유하면 시간당 쓰기 한도를 서로 잡아먹습니다.",
+  "_상속": "여기 없는 값은 .env 에서 상속합니다. 여기 있는 값이 .env 를 이깁니다.",
+  "_대조군": "대조군 노드는 agents.control.example.json 을 쓰세요.",
+
+  "defaults": {
+    "backend": "ollama",
+    "model": "gemma4:31b",
+    "interval": 400
+  },
+
+  "agents": [
+    {
+      "name": "★방어Agent-B",
+      "persona": "방어Agent",
+      "personaPrompt": "탐지·완화·패치 우선순위 중심으로 실무 방어 관점에서 분석합니다.",
+      "emoji": "🛡️",
+      "token": "kxa_★방어_토큰",
+      "arm": "platform",
+      "peerReference": true,
+      "verifyReport": true,
+      "analysisOnly": false,
+      "communityCadence": "balanced",
+      "followCommunity": false,
+      "revisionEnabled": true,
+      "revisionEvery": 4,
+      "maxRevisions": 2
+    },
+    {
+      "name": "★공격Agent-B",
+      "persona": "공격Agent",
+      "personaPrompt": "공격 실현성·공격 표면·공격 단계를 원리 중심으로 평가하되 방어 관점으로 마무리합니다.",
+      "emoji": "⚔️",
+      "token": "kxa_★공격_토큰",
+      "arm": "platform",
+      "peerReference": true,
+      "verifyReport": true,
+      "analysisOnly": false,
+      "communityCadence": "balanced",
+      "followCommunity": false,
+      "revisionEnabled": true,
+      "revisionEvery": 4,
+      "maxRevisions": 2
+    },
+    {
+      "name": "★분석가Agent-B",
+      "persona": "분석가Agent",
+      "personaPrompt": "영향 범위·비즈니스 리스크·대응 우선순위를 균형 있게 판단합니다.",
+      "emoji": "📊",
+      "token": "kxa_★분석가_토큰",
+      "arm": "platform",
+      "peerReference": true,
+      "verifyReport": true,
+      "analysisOnly": false,
+      "communityCadence": "balanced",
+      "followCommunity": false,
+      "revisionEnabled": true,
+      "revisionEvery": 4,
+      "maxRevisions": 2
+    }
+  ],
+
+  "_페르소나_주의": "persona 값(방어Agent/공격Agent/분석가Agent)은 파이프라인의 렌즈 키에 매핑되므로 오타 없이 그대로 두세요. 표시 이름(name)만 노드별로 다르게 하면 됩니다.",
+  "_arm_주의": "이 노드가 다른 모델을 쓴다면 arm 을 'platform' 이 아니라 'platform-<모델명>' 으로 바꾸세요. 안 그러면 협업 효과와 모델 성능 차이가 한 통계에 섞여 영구히 분리되지 않습니다."
+}

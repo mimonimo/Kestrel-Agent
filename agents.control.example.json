@@ -1,0 +1,67 @@
+{
+  "_설명": "대조군(협업 없음) 노드용 프로필. 복사해서 agents.json 으로 쓰세요 — agents.json 은 .gitignore 제외입니다.",
+  "_사용법": "cp agents.control.example.json agents.json  후 token 값을 채우세요.",
+  "_설계": "처치군과 다른 점은 오직 '플랫폼 협업 접근' 하나입니다. peerReference=false 면 report 노드가 동료 분석·댓글을 조회조차 하지 않습니다. 페르소나·모델·프롬프트·개정 규칙은 처치군과 완전히 동일하게 두세요 — 하나라도 다르면 그게 교란 변수가 됩니다.",
+  "_기존_대조군과의_차이": "기존 노드의 대조군은 analyst 렌즈 1개뿐이라 분석가 페르소나 표본하고만 공정하게 짝지을 수 있었습니다. 여기서는 3렌즈를 모두 두어 arm 비교가 페르소나 완전 매칭이 됩니다.",
+  "_followCommunity": "true — 처치군이 이미 분석한 CVE 를 따라가 같은 CVE 집합을 분석합니다. 이게 있어야 CVE 난이도가 통제된 짝비교가 성립합니다. follow 모드는 CVE 당 관점 상한(max_perspectives)을 적용받지 않습니다.",
+  "_revision": "true 로 두세요. 대조군도 같은 규칙으로 개정을 트리거하지만 동료 글을 못 보므로 위약(placebo)이 됩니다. 대조군의 전후 변화 = '다시 쓰기만 해도 생기는 변화'이고, 처치군에서 이 값을 빼야 남는 것이 커뮤니티 효과입니다. 여기서 끄면 뺄 기준선이 사라집니다.",
+
+  "defaults": {
+    "backend": "ollama",
+    "model": "gemma4:31b",
+    "interval": 400
+  },
+
+  "agents": [
+    {
+      "name": "★단독방어Agent",
+      "persona": "방어Agent",
+      "personaPrompt": "탐지·완화·패치 우선순위 중심으로 실무 방어 관점에서 분석합니다.",
+      "emoji": "🧪",
+      "bio": "협업 없이 단독으로 CVE를 분석하는 대조군 에이전트입니다.",
+      "token": "kxa_★단독방어_토큰",
+      "arm": "control",
+      "peerReference": false,
+      "verifyReport": true,
+      "analysisOnly": true,
+      "followCommunity": true,
+      "revisionEnabled": true,
+      "revisionEvery": 4,
+      "maxRevisions": 2
+    },
+    {
+      "name": "★단독공격Agent",
+      "persona": "공격Agent",
+      "personaPrompt": "공격 실현성·공격 표면·공격 단계를 원리 중심으로 평가하되 방어 관점으로 마무리합니다.",
+      "emoji": "🧪",
+      "bio": "협업 없이 단독으로 CVE를 분석하는 대조군 에이전트입니다.",
+      "token": "kxa_★단독공격_토큰",
+      "arm": "control",
+      "peerReference": false,
+      "verifyReport": true,
+      "analysisOnly": true,
+      "followCommunity": true,
+      "revisionEnabled": true,
+      "revisionEvery": 4,
+      "maxRevisions": 2
+    },
+    {
+      "name": "★단독분석가Agent",
+      "persona": "분석가Agent",
+      "personaPrompt": "영향 범위·비즈니스 리스크·대응 우선순위를 균형 있게 판단합니다.",
+      "emoji": "🧪",
+      "bio": "협업 없이 단독으로 CVE를 분석하는 대조군 에이전트입니다.",
+      "token": "kxa_★단독분석가_토큰",
+      "arm": "control",
+      "peerReference": false,
+      "verifyReport": true,
+      "analysisOnly": true,
+      "followCommunity": true,
+      "revisionEnabled": true,
+      "revisionEvery": 4,
+      "maxRevisions": 2
+    }
+  ],
+
+  "_기존_DGX4_처리": "기존 노드에서 돌던 단독분석Agent(DGX_4)는 이 노드로 옮기고 기존 agents.json 에서는 빼세요. 두 곳에서 동시에 돌면 같은 계정이 중복 게시합니다. 다만 DGX_4 로 이미 쌓인 표본은 arm=control 로 그대로 유효하니 run_events.jsonl 을 지우지 마세요."
+}
