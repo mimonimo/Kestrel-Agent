@@ -21,10 +21,40 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+
+# ─── 게시 전 텍스트 손질 ──────────────────────────────────────
+# 여기서 손질하는 이유: 생성 경로가 여럿(리포트·댓글·토픽글)이라 각각에서 처리하면
+# 새 경로가 생길 때마다 빠뜨린다. 나가는 문을 하나로 두는 편이 확실하다.
+
+_DASHES = "‐‑‒–—―−﹣－"   # ASCII 하이픈은 치환 대상이 아니므로 뺀다
+_CVE_DASH_RE = re.compile(rf"(CVE)[-{_DASHES}](\d{{4}})[-{_DASHES}](\d{{4,7}})",
+                          re.IGNORECASE)
+_EMPHASIS_RE = re.compile(r"\*\*(.+?)\*\*|__(.+?)__", re.DOTALL)
+
+
+def _ascii_cve_ids(text: str) -> str:
+    """CVE 식별자 안의 하이픈만 ASCII 로 되돌린다.
+
+    플랫폼의 자동 링크는 ASCII 하이픈만 매칭하는데 모델이 U+2011 을 섞어 써서
+    상당수 CVE 가 링크되지 않았다. 산문 쪽 붙임표는 건드리지 않는다 — 링크와
+    무관하고, 본문을 필요 이상으로 바꾸면 표본 간 텍스트 비교가 흐려진다.
+    """
+    return _CVE_DASH_RE.sub(lambda m: f"{m.group(1)}-{m.group(2)}-{m.group(3)}",
+                            text or "")
+
+
+def _strip_emphasis(text: str) -> str:
+    """마크다운 강조 표시를 벗긴다 — 평문으로 전송되는 필드 전용.
+
+    댓글은 contentMd 가 아니라 content(평문)로 가므로 렌더링되지 않는다.
+    **강조** 를 그대로 두면 별표가 화면에 그대로 노출된다.
+    """
+    return _EMPHASIS_RE.sub(lambda m: m.group(1) or m.group(2) or "", text or "")
 
 
 def register_agent(
@@ -177,9 +207,9 @@ class Kestrel:
         None 인 필드는 body 에서 생략(플랫폼이 null 처리 — 기존/자유 게시 분석과 구분).
         필드명은 플랫폼 PublishAnalysisIn(camelCase)과 1:1.
         """
-        body = {"cveId": cve_id, "contentMd": content_md}
+        body = {"cveId": cve_id, "contentMd": _ascii_cve_ids(content_md)}
         if title:
-            body["title"] = title
+            body["title"] = _ascii_cve_ids(title)
         structured = {
             "epssScore": epss_score,
             "epssPercentile": epss_percentile,
@@ -200,7 +230,8 @@ class Kestrel:
 
         parent_id(대댓글)만 있고 analysis_id 가 없으면 서버가 부모 댓글의 분석을 상속한다.
         """
-        body: dict = {"cveId": cve_id, "content": content}
+        body: dict = {"cveId": cve_id,
+                      "content": _strip_emphasis(_ascii_cve_ids(content))}
         if analysis_id is not None:
             body["analysisId"] = analysis_id
         if parent_id is not None:
@@ -209,7 +240,9 @@ class Kestrel:
 
     def publish_post(self, title: str, content_md: str) -> dict:
         """CVE 에 묶이지 않은 자유 토픽 글을 게시한다."""
-        return self._request("POST", "/agent/posts", {"title": title, "contentMd": content_md})  # type: ignore[return-value]
+        return self._request("POST", "/agent/posts",  # type: ignore[return-value]
+                             {"title": _ascii_cve_ids(title),
+                              "contentMd": _ascii_cve_ids(content_md)})
 
     # ─── 헬스 체크 ───────────────────────────────────────────
     def ping(self) -> bool:

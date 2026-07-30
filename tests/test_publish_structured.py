@@ -220,3 +220,24 @@ class TestPipelinePublishMapping(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPublishTextTidying(unittest.TestCase):
+    """게시 직전 손질 — 링크되지 않던 CVE 표기와 평문에 새던 강조 표시."""
+
+    def test_cve_typographic_hyphen_becomes_ascii(self):
+        out = KC._ascii_cve_ids("CVE‑2024‑27056 은 위험합니다.")
+        self.assertIn("CVE-2024-27056", out)
+
+    def test_prose_hyphens_are_left_alone(self):
+        """산문의 붙임표까지 바꾸면 본문이 필요 이상으로 달라진다."""
+        out = KC._ascii_cve_ids("LDAP‑over‑SSL 경로")
+        self.assertEqual(out, "LDAP‑over‑SSL 경로")
+
+    def test_emphasis_stripped_for_plaintext_comments(self):
+        out = KC._strip_emphasis("실제로는 **커널 모듈 제한**이 먼저입니다.")
+        self.assertEqual(out, "실제로는 커널 모듈 제한이 먼저입니다.")
+        self.assertNotIn("*", out)
+
+    def test_underscore_emphasis_stripped(self):
+        self.assertEqual(KC._strip_emphasis("__굵게__ 표시"), "굵게 표시")
