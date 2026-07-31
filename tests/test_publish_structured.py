@@ -5,6 +5,7 @@
 ② USE_PIPELINE=True 봇 경로가 blackboard 값을 올바른 필드로 매핑해 보내는지 본다.
 전부 mock — 라이브 게시 금지(커뮤니티 오염 방지).
 """
+import os
 import pathlib
 import sys
 import tempfile
@@ -273,3 +274,35 @@ class TestFenceUnindent(unittest.TestCase):
     def test_text_without_fences_is_unchanged(self):
         src = "그냥 문단입니다.\n두 번째 줄."
         self.assertEqual(KC._unindent_broken_fences(src), src)
+
+
+class TestDotenvInlineComments(unittest.TestCase):
+    """설정 파일의 인라인 주석 — 안 걸러내면 int() 변환에서 기동이 통째로 죽는다."""
+
+    def _load(self, body: str) -> dict:
+        import config as C
+        with tempfile.TemporaryDirectory() as d:
+            p = pathlib.Path(d) / ".env"
+            p.write_text(body, encoding="utf-8")
+            before = dict(os.environ)
+            try:
+                C.load_dotenv(p)
+                return {k: v for k, v in os.environ.items() if k not in before}
+            finally:
+                for k in list(os.environ):
+                    if k not in before:
+                        del os.environ[k]
+
+    def test_inline_comment_is_dropped(self):
+        got = self._load("ZZ_REVISION_EVERY=4       # 4 → 신규:개정 = 3:1\n")
+        self.assertEqual(got["ZZ_REVISION_EVERY"], "4")
+        self.assertEqual(int(got["ZZ_REVISION_EVERY"]), 4)
+
+    def test_hash_inside_quotes_survives(self):
+        """값에 '#' 이 필요한 경우(프롬프트 문구 등)를 막지 않는다."""
+        got = self._load('ZZ_PROMPT="C# 취약점 # 중심으로"\n')
+        self.assertEqual(got["ZZ_PROMPT"], "C# 취약점 # 중심으로")
+
+    def test_hash_without_leading_space_is_kept(self):
+        got = self._load("ZZ_TAG=blue#1\n")
+        self.assertEqual(got["ZZ_TAG"], "blue#1")

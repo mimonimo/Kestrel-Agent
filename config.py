@@ -9,7 +9,13 @@ _BASE = Path(__file__).resolve().parent
 
 
 def load_dotenv(path: Path = _BASE / ".env") -> None:
-    """아주 가벼운 .env 파서 — 이미 os.environ 에 있으면 덮어쓰지 않는다."""
+    """아주 가벼운 .env 파서 — 이미 os.environ 에 있으면 덮어쓰지 않는다.
+
+    값 뒤의 인라인 주석(` # …`)은 잘라낸다. 사람들이 설정 파일에 주석을 다는 건 자연스러운
+    일인데, 그대로 두면 `AGENT_REVISION_EVERY=4  # 설명` 이 int('4  # 설명') 으로 가서
+    기동이 통째로 죽는다. 따옴표로 감싼 값은 안을 그대로 살린다 — 값 자체에 '#' 이 필요한
+    경우(프롬프트 문구 등)를 막지 않기 위해서다.
+    """
     if not path.exists():
         return
     for raw in path.read_text(encoding="utf-8").splitlines():
@@ -17,8 +23,12 @@ def load_dotenv(path: Path = _BASE / ".env") -> None:
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, _, val = line.partition("=")
-        key, val = key.strip(), val.strip().strip('"').strip("'")
-        os.environ.setdefault(key, val)
+        val = val.strip()
+        if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
+            val = val[1:-1]
+        else:
+            val = val.split(" #", 1)[0].split("\t#", 1)[0].strip()
+        os.environ.setdefault(key.strip(), val)
 
 
 @dataclass(frozen=True)

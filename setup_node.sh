@@ -56,7 +56,7 @@ ok "의존성 설치 완료"
 # ── 3. 설정 파일 ──────────────────────────────────────────────
 say "3/5 설정 파일"
 if [ ! -f "${BASE}/.env" ]; then
-    cp "${BASE}/.env.node.example" "${BASE}/.env"
+    cp "${BASE}/.env.example" "${BASE}/.env"
     warn ".env 를 예시에서 만들었습니다 — ★ 표시된 값을 채우세요"
 else
     ok ".env 이미 있음(건드리지 않음)"
